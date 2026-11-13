@@ -14,6 +14,8 @@ HAP's own app backup saves apps, worksheets, workflows, views and records, but n
 - Every run is logged. `--check` tests the server, `--debug` logs every command and file, and `--support-bundle` packs everything support needs.
 - Python 3.8+ standard library only. Nothing to install in the HAP containers.
 
+**Step-by-step runbook:** https://chaiboonhong.github.io/hap-attachment-backup/ (install, check, logs and debugging, troubleshooting, restore, hand-over checklist).
+
 ## Install
 
 On the HAP server, as root:

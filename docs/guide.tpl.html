@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HAP Attachment Backup</title>
+<meta name="description" content="Runbook for HAP Attachment Backup: install on a client HAP server, check, logs and debugging, troubleshooting and restore.">
+<!-- Source of docs/index.html. Edit this file, then run: python3 docs/build.py (it embeds the script files and the version). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: runbook - sticky step index on the left, one ~70ch reading column; index stacks above content on phones */
+:root {
+  --bg: #F4F6F7;
+  --surface: #FFFFFF;
+  --fg: #16212B;
+  --muted: #586572;
+  --line: #DAE0E5;
+  --accent: #1B5C97;
+  --accent-soft: #E2EDF7;
+  --code-bg: #EBEFF2;
+  --code-fg: #18242F;
+  --ok: #1D7A4E;
+  --ok-soft: #E0F2E8;
+  --warn: #965A00;
+  --warn-soft: #FAEFDB;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-head: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0E1318; --surface: #151C23; --fg: #E2E8ED; --muted: #95A2AE; --line: #25303A;
+    --accent: #72AAE0; --accent-soft: #15273A; --code-bg: #0A0E12; --code-fg: #D5DEE6;
+    --ok: #5BC08D; --ok-soft: #11281C; --warn: #E2A848; --warn-soft: #2D2211;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0E1318; --surface: #151C23; --fg: #E2E8ED; --muted: #95A2AE; --line: #25303A;
+  --accent: #72AAE0; --accent-soft: #15273A; --code-bg: #0A0E12; --code-fg: #D5DEE6;
+  --ok: #5BC08D; --ok-soft: #11281C; --warn: #E2A848; --warn-soft: #2D2211;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 15.5px/1.65 var(--font-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 64px;
+}
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+code, pre, kbd { font-family: var(--font-mono); font-size: 0.88em; }
+:not(pre) > code { background: var(--code-bg); color: var(--code-fg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+h1, h2, h3 { font-family: var(--font-head); line-height: 1.2; text-wrap: balance; margin: 0; }
+h2 { font-size: 1.6rem; font-weight: 600; }
+h3 { font-size: 1.12rem; font-weight: 600; }
+p { margin: 0; }
+
+.wrap { max-width: 1120px; margin: 0 auto; }
+
+/* header */
+.top { padding-block: 40px 28px; border-bottom: 1px solid var(--line); display: grid; gap: 14px; }
+.eyebrow { font: 500 0.75rem/1 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+h1 { font-size: clamp(2rem, 5vw, 2.9rem); font-weight: 600; letter-spacing: -0.01em; }
+.lede { max-width: 68ch; font-size: 1.05rem; color: var(--fg); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+a.chip { color: var(--accent); text-decoration: none; }
+a.chip:hover { border-color: var(--accent); }
+.chip { font: 0.78rem/1 var(--font-mono); color: var(--muted); border: 1px solid var(--line); padding: 6px 9px; border-radius: 999px; background: var(--surface); }
+
+/* layout */
+.layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 48px; padding-top: 32px; }
+.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 20px); align-self: start; font-size: 0.88rem; }
+.toc p { font: 500 0.72rem/1 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+.toc ol, .toc ul { list-style: none; margin: 0 0 18px; padding: 0; display: grid; gap: 2px; }
+.toc a { display: flex; gap: 8px; padding: 4px 8px; border-radius: 6px; color: var(--fg); text-decoration: none; }
+.toc a:hover { background: var(--accent-soft); color: var(--accent); }
+.toc .n { font-family: var(--font-mono); color: var(--muted); min-width: 1.4em; }
+main { display: grid; gap: 56px; min-width: 0; }
+section { display: grid; gap: 16px; min-width: 0; scroll-margin-top: 16px; }
+.measure { max-width: 70ch; }
+.section-head { display: flex; align-items: baseline; gap: 12px; }
+.step-no { font: 500 0.82rem/1 var(--font-mono); color: var(--accent); border: 1px solid var(--accent); border-radius: 6px; padding: 5px 7px; flex: none; }
+.kicker { font: 500 0.72rem/1 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+
+/* facts */
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.fact { background: var(--surface); padding: 14px 16px; display: grid; gap: 4px; align-content: start; }
+.fact dt { font: 500 0.72rem/1.2 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.fact dd { margin: 0; }
+.formula { font-family: var(--font-mono); font-size: 0.92rem; overflow-wrap: anywhere; }
+.formula b { color: var(--accent); font-weight: 500; }
+
+/* status */
+.status { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.status-head { padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: baseline; }
+.status ul { list-style: none; margin: 0; padding: 0; }
+.status li { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 12px; padding: 11px 16px; border-bottom: 1px solid var(--line); align-items: start; }
+.status li:last-child { border-bottom: 0; }
+.pill { font: 500 0.72rem/1 var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; padding: 5px 8px; border-radius: 999px; justify-self: start; }
+.pill.ok { color: var(--ok); background: var(--ok-soft); }
+.pill.warn { color: var(--warn); background: var(--warn-soft); }
+.status .what { min-width: 0; overflow-wrap: anywhere; }
+.status .what small { display: block; color: var(--muted); font-size: 0.86rem; }
+
+/* flow */
+.flow { list-style: none; counter-reset: f; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.flow li { counter-increment: f; border-top: 2px solid var(--accent); padding-top: 10px; display: grid; gap: 4px; font-size: 0.93rem; }
+.flow li::before { content: counter(f, decimal-leading-zero); font: 500 0.75rem/1 var(--font-mono); color: var(--accent); }
+.flow b { font-weight: 600; }
+
+/* code */
+.code { position: relative; background: var(--code-bg); color: var(--code-fg); border-radius: 8px; border: 1px solid var(--line); min-width: 0; }
+.code pre { margin: 0; padding: 14px 16px; overflow-x: auto; line-height: 1.55; font-size: 0.84rem; white-space: pre; }
+.code .label { font: 0.72rem/1 var(--font-mono); color: var(--muted); padding: 10px 16px 0; display: block; }
+.copy {
+  position: absolute; top: 8px; right: 8px; font: 500 0.74rem/1 var(--font-mono);
+  background: var(--surface); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; cursor: pointer;
+}
+.copy:hover { border-color: var(--accent); color: var(--accent); }
+.code.has-label .copy { top: 6px; }
+.out pre { color: var(--muted); }
+
+/* tables */
+.table { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+th { font: 500 0.72rem/1.3 var(--font-mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); background: var(--bg); white-space: nowrap; }
+td code { white-space: nowrap; }
+td.wrap-code code { white-space: normal; }
+.num { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
+
+/* notes */
+.note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 11px 14px; border-radius: 0 8px 8px 0; font-size: 0.93rem; max-width: 74ch; }
+.note.warn { border-color: var(--warn); background: var(--warn-soft); }
+.note b { font-weight: 600; }
+.steps { margin: 0; padding-left: 1.3em; display: grid; gap: 8px; max-width: 72ch; }
+.steps li::marker { font-family: var(--font-mono); color: var(--accent); }
+.plain { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 72ch; }
+.options { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.option { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 16px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+
+/* files */
+details.file { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+details.file + details.file { margin-top: 10px; }
+details.file summary { cursor: pointer; padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; list-style: none; }
+details.file summary::-webkit-details-marker { display: none; }
+details.file summary::before { content: "+"; font-family: var(--font-mono); color: var(--accent); width: 1ch; }
+details.file[open] summary::before { content: "\2212"; }
+details.file summary code { background: none; padding: 0; font-weight: 500; color: var(--fg); }
+details.file summary span { color: var(--muted); font-size: 0.88rem; }
+details.file .code { margin: 0 12px 12px; }
+details.file .code pre { max-height: 520px; }
+
+footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.85rem; }
+
+@media (max-width: 880px) {
+  .layout { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  .toc { position: static; border: 1px solid var(--line); border-radius: 10px; padding: 14px; background: var(--surface); }
+  .toc ol, .toc ul { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .status li { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <span class="eyebrow">Nocoly HAP &middot; client server runbook</span>
+    <h1>HAP Attachment Backup</h1>
+    <p class="lede">HAP's app backup saves apps, worksheets, workflows, views and records, but not the files attached to records. This tool backs up those files on the client's Linux server that runs HAP, and names each one so HAP's <b>Import Attachments</b> can put it back on its record. Every run is logged, and built-in checks make problems easy to find.</p>
+    <div class="chips">
+      <span class="chip">version @@VERSION@@</span>
+      <span class="chip">HAP 7.x standalone (Docker)</span>
+      <span class="chip">tested: HAP 7.4.5, Debian 13</span>
+      <a class="chip" href="https://github.com/ChaiBoonHong/hap-attachment-backup">github.com/ChaiBoonHong/hap-attachment-backup</a>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="toc" aria-label="Contents">
+      <p>Overview</p>
+      <ul>
+        <li><a href="#glance"><span class="n">&middot;</span>At a glance</a></li>
+        <li><a href="#how"><span class="n">&middot;</span>How it works</a></li>
+        <li><a href="#req"><span class="n">&middot;</span>Requirements</a></li>
+      </ul>
+      <p>Setup on a client server</p>
+      <ol>
+        <li><a href="#step-1"><span class="n">1</span>Install</a></li>
+        <li><a href="#step-2"><span class="n">2</span>Check the server</a></li>
+        <li><a href="#step-3"><span class="n">3</span>Review settings</a></li>
+        <li><a href="#step-4"><span class="n">4</span>Dry run</a></li>
+        <li><a href="#step-5"><span class="n">5</span>First full backup</a></li>
+        <li><a href="#step-6"><span class="n">6</span>Confirm the schedule</a></li>
+        <li><a href="#step-7"><span class="n">7</span>Hand over</a></li>
+      </ol>
+      <p>Use</p>
+      <ul>
+        <li><a href="#logs"><span class="n">&middot;</span>Logs and debugging</a></li>
+        <li><a href="#trouble"><span class="n">&middot;</span>Troubleshooting</a></li>
+        <li><a href="#restore"><span class="n">&middot;</span>Restore files</a></li>
+        <li><a href="#operate"><span class="n">&middot;</span>Day-to-day</a></li>
+        <li><a href="#files"><span class="n">&middot;</span>Script files</a></li>
+      </ul>
+    </nav>
+
+    <main>
+      <section id="glance">
+        <h2>At a glance</h2>
+        <dl class="facts">
+          <div class="fact"><dt>File name</dt><dd class="formula"><b>&lt;record title&gt;</b>_<b>&lt;original name&gt;</b>.&lt;ext&gt;</dd></div>
+          <div class="fact"><dt>What is backed up</dt><dd>Every file in worksheet attachment fields, any type, from records that are not in the recycle bin.</dd></div>
+          <div class="fact"><dt>When</dt><dd>Sunday 02:00 full copy. Monday to Saturday 02:00 new files only. Any time by hand.</dd></div>
+          <div class="fact"><dt>Where</dt><dd><code>/data/hap-attachment-backup</code>, or any folder set in <code>backup.conf</code>.</dd></div>
+          <div class="fact"><dt>Kept for</dt><dd>The last 4 good full copies and 14 days of nightly runs. Older ones are removed automatically.</dd></div>
+          <div class="fact"><dt>Logs</dt><dd><code>/var/log/hap-attachment-backup.log</code>, plus a <code>run.log</code> in every backup set. <code>--debug</code> for full detail.</dd></div>
+          <div class="fact"><dt>Effect on HAP</dt><dd>Reads only. The optional storage restore writes only files that are missing.</dd></div>
+          <div class="fact"><dt>Install</dt><dd>One command from GitHub. Python 3 standard library only; nothing is added to the HAP containers.</dd></div>
+        </dl>
+        <p class="measure">Not included: discussion and chat files, logos, avatars and system icons. Only files attached to records are backed up.</p>
+      </section>
+
+      <section id="how">
+        <h2>How it works</h2>
+        <ol class="flow">
+          <li><b>List attachments</b>A read-only query in the HAP MongoDB container lists every attachment, its record title, app and worksheet.</li>
+          <li><b>Copy files</b>Each file is streamed out of HAP storage with <code>mc cat</code> in the HAP app container.</li>
+          <li><b>Name and check</b>Files are named for Import Attachments and checksummed (SHA-256) into <code>manifest.csv</code>.</li>
+          <li><b>Finish the set</b>The set is renamed from <code>.partial</code> only when complete, the result goes to <code>last_run.json</code>, and old sets are removed.</li>
+        </ol>
+        <div class="code has-label"><span class="label">backup folder layout</span><button class="copy" type="button">Copy</button><pre><code>/data/hap-attachment-backup/
+  state.json                      # files already backed up (used by nightly runs)
+  last_run.json                   # result of the last backup run
+  full-2026-11-15_0200/           # Sunday full copy
+    &lt;App&gt;/&lt;Worksheet&gt;/&lt;Title&gt;_&lt;Original name&gt;.&lt;ext&gt;
+    manifest.csv                  # every file: record ID, title, original name, storage path, SHA-256
+    missing.csv                   # attachments that could not be backed up, with the reason
+    summary.txt                   # counts, versions, exit code
+    run.log                       # log of the run that wrote this set
+  incr-2026-11-16_0200/           # nightly: only files not backed up before
+  incr-2026-11-17_0200/</code></pre></div>
+        <p class="measure">To restore everything as of a given night, use the latest full set before that night plus every nightly set after it.</p>
+      </section>
+
+      <section id="req">
+        <h2>Requirements</h2>
+        <div class="table"><table>
+          <thead><tr><th>Needed</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td>HAP standalone in Docker</td><td>Tested with HAP 7.4.5. Containers are found by image: <code>nocoly/sc</code> + <code>nocoly/hap</code>, or <code>mingdaoyun-sc</code> + <code>mingdaoyun-community</code>.</td></tr>
+            <tr><td>Root access</td><td><code>sudo</code> on the HAP server</td></tr>
+            <tr><td><code>python3</code> 3.8 or later</td><td>Standard on current Debian, Ubuntu, RHEL and Rocky. <code>apt install python3</code> or <code>dnf install python3</code>.</td></tr>
+            <tr><td><code>curl</code> or <code>wget</code></td><td>For the one-line install. Not needed for the offline install.</td></tr>
+            <tr><td>Disk space</td><td>Room for the attachments several times over: 4 weekly full copies are kept by default. A separate disk is best.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section id="step-1">
+        <div class="section-head"><span class="step-no">1</span><h2>Install</h2></div>
+        <p class="measure">On the client's HAP server, as root. The installer downloads the latest release, installs it, sets up the schedule and log rotation, and runs the system check.</p>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><code>curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash</code></pre></div>
+        <div class="options">
+          <div class="option">
+            <h3>Options</h3>
+            <p>Add them after <code>bash -s --</code>:</p>
+            <div class="code"><button class="copy" type="button">Copy</button><pre><code>G=https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh
+curl -fsSL $G | sudo bash -s -- --version v1.1.0   # a given release
+curl -fsSL $G | sudo bash -s -- --no-cron          # no schedule
+curl -fsSL $G | sudo bash -s -- /srv/hap-backup    # another install folder</code></pre></div>
+          </div>
+          <div class="option">
+            <h3>Server without internet</h3>
+            <p>Download <a href="https://github.com/ChaiBoonHong/hap-attachment-backup/releases/latest">the release file</a> on a PC, copy it over, then on the server:</p>
+            <div class="code"><button class="copy" type="button">Copy</button><pre><code>scp hap-attachment-backup-@@VERSION@@.tar.gz &lt;user&gt;@&lt;server&gt;:/tmp/
+# on the server
+cd /tmp &amp;&amp; tar xzf hap-attachment-backup-@@VERSION@@.tar.gz
+sudo bash hap-attachment-backup-@@VERSION@@/install.sh</code></pre></div>
+          </div>
+        </div>
+        <div class="table"><table>
+          <thead><tr><th>Created</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><code>/opt/hap-attachment-backup/</code></td><td>Script, <code>backup.conf</code> (root only), <code>backup.conf.example</code>, README</td></tr>
+            <tr><td><code>/usr/local/bin/hap-attachment-backup</code></td><td>The command used below</td></tr>
+            <tr><td><code>/data/hap-attachment-backup/</code></td><td>Backup folder (<code>BACKUP_DIR</code>)</td></tr>
+            <tr><td><code>/etc/cron.d/hap-attachment-backup</code></td><td>Nightly and weekly schedule</td></tr>
+            <tr><td><code>/etc/logrotate.d/hap-attachment-backup</code></td><td>Rotates the log weekly, keeps 8 weeks</td></tr>
+            <tr><td><code>/var/log/hap-attachment-backup.log</code></td><td>Log of every run</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section id="step-2">
+        <div class="section-head"><span class="step-no">2</span><h2>Check the server</h2></div>
+        <p class="measure">The installer already ran this. Run it again after any change. Every <code>[FAIL]</code> and <code>[WARN]</code> line comes with a <code>fix:</code> line.</p>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo hap-attachment-backup --check</code></pre></div>
+        <div class="code out has-label"><span class="label">a healthy server</span><pre><code>HAP attachment backup 1.1.0 - system check on hap-prod-01, 2026-11-13 10:33:24
+settings: /opt/hap-attachment-backup/backup.conf
+
+[ OK ] running as root
+[ OK ] Python 3.13.5
+[ OK ] Docker 29.8.2
+[ OK ] MongoDB container: script-sc-1 (nocoly/sc:3.2.0), found automatically
+[ OK ] HAP app container: script-app-1 (nocoly/hap:7.4.5), found automatically
+[ OK ] MongoDB shell: mongo
+[ OK ] MongoDB 4.4.30: HAP databases found
+[INFO] 15 attachment fields; 2480 file records in HAP
+[ OK ] HAP 7.4.5 (nocoly/hap:7.4.5)
+[ OK ] storage alias 'file' -&gt; http://sc:9010
+[ OK ] storage buckets: mdmedia, mdoc, mdpic, mdpub
+[ OK ] storage read test: 5 of 5 newest HAP files found; read 104.5 KB in 0.07s
+[INFO] backup folder /data/hap-attachment-backup does not exist yet; it is created by the first run
+[ OK ] backup disk (/data): 128.3 GB free of 195.8 GB (65% free)
+[WARN] backups are on the same disk as HAP data (/data/hap/script/volume/data)
+       fix: copy the backup folder to another server or disk regularly (rsync)
+[ OK ] log file /var/log/hap-attachment-backup.log (0 B), LOG_LEVEL=INFO
+[ OK ] log rotation: /etc/logrotate.d/hap-attachment-backup
+[ OK ] schedule: 0 2 * * 0  --full --quiet
+[ OK ] schedule: 0 2 * * 1-6  --incremental --quiet
+[ OK ] cron service 'cron' is running
+[INFO] server time zone: Asia/Singapore, now 2026-11-13 10:33; cron times use this zone
+[WARN] no backup has run yet
+       fix: run: sudo hap-attachment-backup --full
+
+result: 0 failed, 2 warnings - ready to back up</code></pre></div>
+        <p class="measure">What it tests: root, Python, Docker, both HAP containers, the MongoDB shell and databases, the HAP version, the storage alias and buckets, a real read of a recent file, the backup folder and free space, whether backups share a disk with HAP data, the log file and rotation, the schedule and cron service, the time zone, and the result of the last run.</p>
+      </section>
+
+      <section id="step-3">
+        <div class="section-head"><span class="step-no">3</span><h2>Review settings</h2></div>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo nano /opt/hap-attachment-backup/backup.conf
+sudo hap-attachment-backup --check</code></pre></div>
+        <p class="measure">Each run reads this file, so changes apply from the next run. A misspelt setting is reported as <code>unknown setting</code> by <code>--check</code> and in the log.</p>
+        <div class="table"><table>
+          <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>BACKUP_DIR</code></td><td><code>/data/hap-attachment-backup</code></td><td>Where backup sets are written. A separate disk is best.</td></tr>
+            <tr><td><code>KEEP_FULL</code></td><td class="num">4</td><td>Good full copies to keep (4 = about a month)</td></tr>
+            <tr><td><code>KEEP_INCR_DAYS</code></td><td class="num">14</td><td>Days of nightly sets to keep</td></tr>
+            <tr><td><code>MIN_FREE_PCT</code></td><td class="num">10</td><td>Skip the run if free space would fall below this percentage</td></tr>
+            <tr><td><code>MONGO_CONTAINER</code></td><td><code>auto</code></td><td>HAP MongoDB container. Set a name if there are several HAP stacks.</td></tr>
+            <tr><td><code>APP_CONTAINER</code></td><td><code>auto</code></td><td>HAP app container with the <code>mc</code> storage client</td></tr>
+            <tr><td><code>MONGO_SHELL</code></td><td><code>auto</code></td><td><code>mongo</code> or <code>mongosh</code></td></tr>
+            <tr><td><code>MONGO_URI</code></td><td>empty</td><td>Only for MongoDB with a password or outside the container</td></tr>
+            <tr><td><code>MINIO_ALIAS</code></td><td><code>file</code></td><td>Storage alias inside the app container</td></tr>
+            <tr><td><code>DELIMITER</code></td><td><code>_</code></td><td>Between title and file name. Use the same in Import Attachments.</td></tr>
+            <tr><td><code>TITLE_MAX_CHARS</code>, <code>NAME_MAX_CHARS</code></td><td class="num">100, 150</td><td>Longer titles and names are shortened</td></tr>
+            <tr><td><code>INCLUDE_APPS</code>, <code>EXCLUDE_APPS</code></td><td>empty</td><td>Comma-separated app IDs or names. Empty means all apps.</td></tr>
+            <tr><td><code>LOG_FILE</code></td><td><code>/var/log/hap-attachment-backup.log</code></td><td>Log file</td></tr>
+            <tr><td><code>LOG_LEVEL</code></td><td><code>INFO</code></td><td><code>DEBUG</code>, <code>INFO</code>, <code>WARNING</code> or <code>ERROR</code></td></tr>
+            <tr><td><code>EXPORT_TIMEOUT</code>, <code>COPY_TIMEOUT</code></td><td class="num">3600</td><td>Seconds for the MongoDB export, and for copying one file</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section id="step-4">
+        <div class="section-head"><span class="step-no">4</span><h2>Dry run</h2></div>
+        <p class="measure">Lists what would be copied, per worksheet, and which attachments have no file. Nothing is written. Add <code>--debug</code> to see every file and the counts per field.</p>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo hap-attachment-backup --dry-run</code></pre></div>
+        <div class="code out has-label"><span class="label">example output</span><pre><code>[INFO] start: backup mode=incremental (dry run) - version 1.1.0, host hap-prod-01, user root, pid 247006, terminal
+[WARNING] no earlier backup found in /data/hap-attachment-backup - running a full backup instead
+[INFO] HAP 7.4.5 (nocoly/hap:7.4.5); MongoDB container script-sc-1 (mongo), app container script-app-1, storage alias file
+[INFO] MongoDB export: 2480 file references in 1.4s
+[INFO] mode=full (dry run): 2480 file references in active records, 2477 with files, 3 without, 2477 to copy (3.2 GB)
+[INFO]   Sales CRM/Contracts/  (412 files)  e.g. CT-2026-0081_Signed contract.pdf
+[INFO]   Sales CRM/Customers/  (1260 files)  e.g. Acme Trading_Business licence.jpg
+[WARNING]   missing: Sales CRM / Contracts / CT-2025-0007 (2ee2d572-...): no file details in HAP (mdattachment)
+[INFO] dry run: nothing was written
+[INFO] finished: backup mode=incremental (dry run) - exit 0 (OK) in 2s</code></pre></div>
+      </section>
+
+      <section id="step-5">
+        <div class="section-head"><span class="step-no">5</span><h2>First full backup</h2></div>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo hap-attachment-backup --full
+sudo hap-attachment-backup --verify      # newest set against its checksums
+sudo hap-attachment-backup --status</code></pre></div>
+        <div class="code out has-label"><span class="label">example output</span><pre><code>[INFO] mode=full: 2480 file references in active records, 2477 with files, 3 without, 2477 to copy (3.2 GB)
+[INFO] writing /data/hap-attachment-backup/.full-2026-11-13_1033.partial
+[INFO] progress: 500/2477 files (20%), 652.1 MB at 41.3 MB/s, about 1m 05s left
+...
+[INFO] done: full-2026-11-13_1033: 2477 files (3.2 GB), 3 missing, 0 copy failures (see missing.csv)
+[INFO] finished: backup mode=full - exit 0 (OK) in 1m 22s
+[INFO] verify full-2026-11-13_1033: 2477/2477 files OK</code></pre></div>
+        <div class="code out has-label"><span class="label">--status</span><pre><code>backup folder : /data/hap-attachment-backup (125.1 GB free of 195.8 GB, 63% free)
+files tracked : 2477 (state.json; nightly runs copy only files not in it)
+running now   : no
+last run      : 2026-11-13T10:34:55+08:00 full -&gt; OK (exit 0), set full-2026-11-13_1033
+                2477 files (3.2 GB), 3 missing, 0 copy failures
+schedule      : /etc/cron.d/hap-attachment-backup
+backup sets   : 1
+  SET                      FILES       SIZE  MISSING  FAILED  FINISHED
+  full-2026-11-13_1033      2477     3.2 GB        3       0  2026-11-13T10:34:55+08:00</code></pre></div>
+        <p class="measure">Read the lists of backed-up and missing files on the server, or copy the CSV files to a PC and open them in Excel:</p>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><code>cd /data/hap-attachment-backup/full-2026-11-13_1033     # use your set name
+sudo python3 -c "import csv,sys; [print(' | '.join(r)) for r in csv.reader(open(sys.argv[1], encoding='utf-8-sig'))]" missing.csv | less -S</code></pre></div>
+      </section>
+
+      <section id="step-6">
+        <div class="section-head"><span class="step-no">6</span><h2>Confirm the schedule</h2></div>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><code>cat /etc/cron.d/hap-attachment-backup
+timedatectl | grep 'Time zone'</code></pre></div>
+        <div class="code out has-label"><span class="label">/etc/cron.d/hap-attachment-backup</span><pre><code># Sunday 02:00 - full copy
+0 2 * * 0   root /opt/hap-attachment-backup/hap-attachment-backup.sh --full --quiet &gt;/dev/null 2&gt;&amp;1
+# Monday-Saturday 02:00 - new files only
+0 2 * * 1-6 root /opt/hap-attachment-backup/hap-attachment-backup.sh --incremental --quiet &gt;/dev/null 2&gt;&amp;1</code></pre></div>
+        <p class="measure">Times follow the server's time zone. To change the time, edit the file: the first two fields are minute and hour, so <code>30 3 * * 0</code> is Sunday 03:30. The morning after, <code>sudo hap-attachment-backup --log</code> shows how the night went.</p>
+      </section>
+
+      <section id="step-7">
+        <div class="section-head"><span class="step-no">7</span><h2>Hand over</h2></div>
+        <p class="measure">Before leaving a client server, confirm each of these:</p>
+        <ul class="plain">
+          <li><code>--check</code> shows <b>0 failed</b>.</li>
+          <li>A full set exists and <code>--verify</code> reports all files OK.</li>
+          <li><code>missing.csv</code> has been reviewed with the client; attachments with no file in HAP cannot be backed up.</li>
+          <li>The client knows where backups are kept, and has a plan to copy them off the server (see <a href="#operate">Day-to-day</a>).</li>
+          <li>One Import Attachments restore was tried in a test worksheet (see <a href="#restore">Restore files</a>).</li>
+          <li>The next morning, <code>--log</code> shows the 02:00 run finished with exit 0.</li>
+        </ul>
+      </section>
+
+      <section id="logs">
+        <h2>Logs and debugging</h2>
+        <div class="table"><table>
+          <thead><tr><th>Where</th><th>What</th></tr></thead>
+          <tbody>
+            <tr><td><code>/var/log/hap-attachment-backup.log</code></td><td>Every run, appended. Rotated weekly, 8 weeks kept.</td></tr>
+            <tr><td><code>&lt;set&gt;/run.log</code></td><td>The full log of the run that wrote that set, kept with its files</td></tr>
+            <tr><td><code>&lt;backup folder&gt;/last_run.json</code></td><td>Time, mode, exit code, set and message of the last backup run. Easy for monitoring tools to read.</td></tr>
+            <tr><td><code>hap-attachment-backup --log</code></td><td>Prints the last backup run from the log. <code>--log 200</code> prints the last 200 lines.</td></tr>
+          </tbody>
+        </table></div>
+        <p class="measure">Each line has a time, a level and a run ID, so one run's lines can be picked out with <code>grep</code>. Start-up failures, such as a missing <code>python3</code>, are written to the log by the wrapper script.</p>
+        <div class="code out has-label"><span class="label">/var/log/hap-attachment-backup.log</span><pre><code>2026-11-14 02:00:01 [INFO] [20261114-020001-24817] start: backup mode=incremental - version 1.1.0, host hap-prod-01, user root, pid 24817, no terminal (cron or script)
+2026-11-14 02:00:01 [INFO] [20261114-020001-24817] HAP 7.4.5 (nocoly/hap:7.4.5); MongoDB container script-sc-1 (mongo), app container script-app-1, storage alias file
+2026-11-14 02:00:02 [INFO] [20261114-020001-24817] MongoDB export: 2492 file references in 1.4s
+2026-11-14 02:00:02 [INFO] [20261114-020001-24817] mode=incr: 2492 file references in active records, 2489 with files, 3 without, 12 to copy (8.4 MB)
+2026-11-14 02:00:04 [INFO] [20261114-020001-24817] done: incr-2026-11-14_0200: 12 files (8.4 MB), 3 missing, 0 copy failures (see missing.csv)
+2026-11-14 02:00:04 [INFO] [20261114-020001-24817] finished: backup mode=incremental - exit 0 (OK) in 3s</code></pre></div>
+
+        <h3>Debug mode</h3>
+        <p class="measure"><code>LOG_LEVEL=INFO</code> logs each step, progress every 500 files or 60 seconds, warnings and errors. Debug also logs every Docker command with its exit code, time and error output, the settings in use (passwords hidden), counts per app, worksheet and field, and every file with its size, time and checksum. Use <code>--debug</code> for one run; leaving <code>LOG_LEVEL=DEBUG</code> on makes the log grow with every file.</p>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo hap-attachment-backup --dry-run --debug   # how attachments are found, without copying
+sudo hap-attachment-backup --check --debug     # every command the check runs
+sudo hap-attachment-backup --log               # the last nightly run
+sudo grep -E '\[(ERROR|WARNING)\]' /var/log/hap-attachment-backup.log | tail -20</code></pre></div>
+        <div class="code out has-label"><span class="label">--debug lines</span><pre><code>[DEBUG] run: docker exec script-sc-1 mongo --quiet --norc --eval &lt;export.js&gt;
+[DEBUG]   exit 0 in 0.14s, 48557 bytes out
+[DEBUG] export: {"field":"Signed copy","worksheet":"Contracts","app":"Sales CRM","references":412}
+[DEBUG]   Sales CRM / Contracts / Signed copy: 412 references, 410 with files
+[DEBUG] copied [37/412] mdoc/doc/20261112/fP0z8C1O.pdf -&gt; Sales CRM/Contracts/CT-2026-0081_Signed contract.pdf, 812.4 KB, 0.03s, sha256 3f9a0c51e2d47b18</code></pre></div>
+
+        <h3>Support bundle</h3>
+        <p class="measure">When something needs a closer look, ask the client to run this and send the file it prints:</p>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo hap-attachment-backup --support-bundle</code></pre></div>
+        <p class="measure">The <code>.tar.gz</code> (in <code>/tmp</code>, readable by root only) holds the check result, status, settings with passwords hidden, the last 5000 log lines, the logs of the last three sets, and system details: OS, Docker, disk, containers, time zone. It holds no attachment files, but log lines can include app, worksheet and record names.</p>
+
+        <h3>Safety checks built in</h3>
+        <ul class="plain">
+          <li>A second backup cannot start while one runs (exit code 3); the log names the running process.</li>
+          <li>A run stops with an error when the first 10 files cannot be read, instead of writing an empty set.</li>
+          <li>Sets are written to a hidden <code>.&lt;set&gt;.partial</code> folder and renamed only when complete. Unfinished folders stay for a day for inspection, then are removed.</li>
+          <li>Full sets where most files failed don't count toward <code>KEEP_FULL</code>, so failed nights never push good full copies out.</li>
+          <li>Files HAP lists but storage lacks are reported as <code>file not in HAP storage</code> in <code>missing.csv</code>, not as failures.</li>
+        </ul>
+      </section>
+
+      <section id="trouble">
+        <h2>Troubleshooting</h2>
+        <p class="measure">Start with <code>sudo hap-attachment-backup --check</code>. Common messages:</p>
+        <div class="table"><table>
+          <thead><tr><th>Message</th><th>Cause</th><th>Fix</th></tr></thead>
+          <tbody>
+            <tr><td class="wrap-code"><code>MONGO_CONTAINER=auto: no HAP container found</code></td><td>Unusual container names or images</td><td>Set <code>MONGO_CONTAINER</code> and <code>APP_CONTAINER</code> to names from <code>docker ps</code></td></tr>
+            <tr><td class="wrap-code"><code>more than one candidate</code></td><td>Several HAP stacks on one server</td><td>Set the container names of the stack to back up</td></tr>
+            <tr><td class="wrap-code"><code>no mongo or mongosh shell in container</code></td><td>Wrong container</td><td>Point <code>MONGO_CONTAINER</code> at the HAP <code>sc</code> container</td></tr>
+            <tr><td class="wrap-code"><code>MongoDB query … failed: … requires authentication</code></td><td>MongoDB has a password or is external</td><td>Set <code>MONGO_URI</code></td></tr>
+            <tr><td class="wrap-code"><code>HAP databases missing</code></td><td>Connected to the wrong MongoDB</td><td>Check <code>MONGO_CONTAINER</code> / <code>MONGO_URI</code></td></tr>
+            <tr><td class="wrap-code"><code>storage alias 'file' not found</code></td><td>Different <code>mc</code> alias</td><td><code>docker exec &lt;app&gt; mc alias list</code>, then set <code>MINIO_ALIAS</code></td></tr>
+            <tr><td class="wrap-code"><code>the first 10 files could not be read from storage, stopping</code></td><td>Storage down, or wrong alias</td><td>Run <code>--check</code>; fix <code>MINIO_ALIAS</code> or start HAP storage</td></tr>
+            <tr><td class="wrap-code"><code>not in storage […]</code></td><td>HAP lists the file but storage doesn't have it</td><td>Nothing to back up; listed in <code>missing.csv</code></td></tr>
+            <tr><td class="wrap-code"><code>another backup or restore is already running</code></td><td>The previous run is still going</td><td>Wait; <code>--status</code> shows the running process</td></tr>
+            <tr><td class="wrap-code"><code>not enough disk space</code></td><td>Free space would drop below <code>MIN_FREE_PCT</code></td><td>Free space, lower <code>KEEP_FULL</code>, or move <code>BACKUP_DIR</code></td></tr>
+            <tr><td class="wrap-code"><code>backup.conf line N: unknown setting</code></td><td>Typo in a setting name</td><td>Correct it; the line is ignored until then</td></tr>
+            <tr><td class="wrap-code"><code>[wrapper] python3 not found</code></td><td>Python missing or older than 3.8</td><td><code>apt install python3</code> or <code>dnf install python3</code></td></tr>
+            <tr><td>No run at 02:00</td><td>Cron stopped or schedule missing</td><td><code>--check</code> shows both; <code>systemctl enable --now cron</code> (or <code>crond</code>)</td></tr>
+            <tr><td>Files land on the wrong record</td><td>Title not unique, or contains <code>_</code></td><td>Use <code>record_id</code> in <code>manifest.csv</code>, or make titles unique</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section id="restore">
+        <h2>Restore files</h2>
+        <p class="measure">Pick the method that matches what was lost.</p>
+        <div class="options">
+          <div class="option">
+            <span class="kicker">Records exist, files are missing</span>
+            <h3>A. Import Attachments in HAP</h3>
+            <p>Use this after restoring an app from a HAP backup, or to put files back on records.</p>
+            <ol class="steps">
+              <li>Copy the worksheet folder to a PC (commands below). Use the latest full set, plus later nightly sets for the newest files.</li>
+              <li>In HAP, open the worksheet, then <b>Import</b> &rsaquo; <b>Import Attachments</b>.</li>
+              <li>Upload the files from <code>&lt;App&gt;/&lt;Worksheet&gt;/</code>. Up to 100 files and 2 GB per upload.</li>
+              <li><b>File Name Matching Field</b>: the worksheet's title field. <b>Delimiter</b>: <code>_</code>.</li>
+              <li><b>Target field</b>: the attachment field, shown in the <code>field</code> column of <code>manifest.csv</code>.</li>
+              <li><b>Write mode</b>: Append keeps existing files. Overwrite replaces them and cannot be undone.</li>
+            </ol>
+          </div>
+          <div class="option">
+            <span class="kicker">Records intact, storage lost</span>
+            <h3>B. Put files back into storage</h3>
+            <p>Puts each file back at its original storage path, so records show their files again with the original file IDs. Files that already exist are left untouched.</p>
+            <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo hap-attachment-backup --restore-storage full-2026-11-15_0200 --dry-run
+sudo hap-attachment-backup --restore-storage full-2026-11-15_0200</code></pre></div>
+            <p>Run it for the full set, then for each later nightly set.</p>
+          </div>
+        </div>
+        <div class="note warn"><b>Titles must be unique.</b> Import Attachments matches on the text before the first <code>_</code>. If two records share a title, or a title contains <code>_</code>, files can land on the wrong record. <code>manifest.csv</code> keeps each file's <code>record_id</code>, and its <code>note</code> column flags these cases.</div>
+        <p class="measure">Copy one worksheet folder from the server to a PC:</p>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><code># on the server
+cd /data/hap-attachment-backup/full-2026-11-15_0200
+sudo tar czf /tmp/restore.tgz "Sales CRM/Contracts"
+sudo chmod 644 /tmp/restore.tgz
+
+# on the PC (PowerShell or a terminal)
+scp &lt;user&gt;@&lt;server&gt;:/tmp/restore.tgz .
+tar -xzf restore.tgz
+
+# back on the server, when done
+sudo rm /tmp/restore.tgz</code></pre></div>
+      </section>
+
+      <section id="operate">
+        <h2>Day-to-day</h2>
+        <div class="table"><table>
+          <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>hap-attachment-backup --check</code></td><td>Tests the whole setup; a fix for every problem</td></tr>
+            <tr><td><code>hap-attachment-backup --status</code></td><td>Backup sets with counts and sizes, last run, running now, schedule</td></tr>
+            <tr><td><code>hap-attachment-backup --log [N]</code></td><td>The last backup run, or the last N log lines</td></tr>
+            <tr><td><code>hap-attachment-backup --dry-run</code></td><td>What would be copied and what is missing. Writes nothing.</td></tr>
+            <tr><td><code>hap-attachment-backup --full</code></td><td>Copies every attachment into a new <code>full-…</code> set</td></tr>
+            <tr><td><code>hap-attachment-backup</code></td><td>Copies only new files into an <code>incr-…</code> set (same as <code>--incremental</code>). Writes no set when nothing is new.</td></tr>
+            <tr><td><code>hap-attachment-backup --verify [SET]</code></td><td>Re-checks a set against its checksums (default: newest)</td></tr>
+            <tr><td><code>hap-attachment-backup --restore-storage SET</code></td><td>Puts missing files back into HAP storage. Add <code>--dry-run</code> to preview.</td></tr>
+            <tr><td><code>hap-attachment-backup --support-bundle</code></td><td>Packs everything support needs into one file</td></tr>
+          </tbody>
+        </table></div>
+        <p class="measure">Run them as root with <code>sudo</code>. Add <code>--debug</code> for full detail or <code>--quiet</code> to print only warnings and errors.</p>
+
+        <h3>Exit codes</h3>
+        <div class="table"><table>
+          <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td class="num">0</td><td>Finished. Attachments with no file in HAP are listed in <code>missing.csv</code> but don't count as a failure.</td></tr>
+            <tr><td class="num">1</td><td>Error: settings, Docker, MongoDB, or storage unreadable. The log says which.</td></tr>
+            <tr><td class="num">2</td><td>Some files could not be copied, or failed verification</td></tr>
+            <tr><td class="num">3</td><td>Another backup or restore is still running</td></tr>
+            <tr><td class="num">4</td><td>Not enough disk space</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Regular checks</h3>
+        <ul class="plain">
+          <li><b>Weekly:</b> <code>sudo hap-attachment-backup --status</code>; the last run should be <code>OK</code> and less than a day old. Monitoring tools can read <code>last_run.json</code> instead.</li>
+          <li><b>After a HAP upgrade:</b> <code>--check</code> and <code>--dry-run</code>, and compare the file counts. An upgrade can change how attachments are stored.</li>
+          <li><b>Monthly:</b> <code>--verify</code> on the newest full set, and one Import Attachments restore in a test worksheet.</li>
+        </ul>
+
+        <h3>Keep a copy off the server</h3>
+        <p class="measure">The default backup folder is on the server's own disk, so it does not protect against losing that disk. Copy it elsewhere on a schedule, for example:</p>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo rsync -a /data/hap-attachment-backup/ backup-user@other-host:/backups/hap-attachments/</code></pre></div>
+
+        <h3>Update</h3>
+        <p class="measure">Run the install command again. <code>backup.conf</code>, backups and the log are kept; new defaults are in <code>backup.conf.example</code>.</p>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><code>curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash</code></pre></div>
+
+        <h3>Uninstall</h3>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo bash /opt/hap-attachment-backup/install.sh --uninstall
+# backups in /data/hap-attachment-backup and the log are kept; delete them only when no longer needed</code></pre></div>
+      </section>
+
+      <section id="files">
+        <h2>Script files</h2>
+        <p class="measure">The @@VERSION@@ package, also at <a href="https://github.com/ChaiBoonHong/hap-attachment-backup">github.com/ChaiBoonHong/hap-attachment-backup</a>. Open a file to read or copy it.</p>
+        <div>
+          <details class="file"><summary><code>get.sh</code><span>One-line installer: downloads the latest release and runs install.sh</span></summary><div class="code"><button class="copy" type="button">Copy</button><pre><code>@@FILE:get.sh@@</code></pre></div></details>
+          <details class="file"><summary><code>install.sh</code><span>Installs, updates or removes the script, command, schedule and log rotation</span></summary><div class="code"><button class="copy" type="button">Copy</button><pre><code>@@FILE:install.sh@@</code></pre></div></details>
+          <details class="file"><summary><code>hap-attachment-backup.sh</code><span>Entry point: finds Python, records start-up failures</span></summary><div class="code"><button class="copy" type="button">Copy</button><pre><code>@@FILE:hap-attachment-backup.sh@@</code></pre></div></details>
+          <details class="file"><summary><code>hap_attachment_backup.py</code><span>Backup, verify, restore, check, status, log and support bundle</span></summary><div class="code"><button class="copy" type="button">Copy</button><pre><code>@@FILE:hap_attachment_backup.py@@</code></pre></div></details>
+          <details class="file"><summary><code>export.js</code><span>Read-only MongoDB query</span></summary><div class="code"><button class="copy" type="button">Copy</button><pre><code>@@FILE:export.js@@</code></pre></div></details>
+          <details class="file"><summary><code>backup.conf</code><span>Settings</span></summary><div class="code"><button class="copy" type="button">Copy</button><pre><code>@@FILE:backup.conf@@</code></pre></div></details>
+        </div>
+      </section>
+
+      <footer>HAP Attachment Backup @@VERSION@@ &middot; <a href="https://github.com/ChaiBoonHong/hap-attachment-backup">github.com/ChaiBoonHong/hap-attachment-backup</a> &middot; MIT licence</footer>
+    </main>
+  </div>
+</div>
+
+<script>
+document.addEventListener("click", function (e) {
+  var btn = e.target.closest(".copy");
+  if (!btn) return;
+  var pre = btn.parentElement.querySelector("pre");
+  var text = pre ? pre.innerText : "";
+  function done(label) { btn.textContent = label; setTimeout(function () { btn.textContent = "Copy"; }, 1600); }
+  function fallback() {
+    var r = document.createRange(); r.selectNodeContents(pre);
+    var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+    done("Selected - press Ctrl+C");
+  }
+  try {
+    navigator.clipboard.writeText(text).then(function () { done("Copied"); }, fallback);
+  } catch (err) { fallback(); }
+});
+</script>
+</body>
+</html>
