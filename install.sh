@@ -61,7 +61,7 @@ python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' \
 VERSION="$(sed -n 's/^VERSION = "\(.*\)"/\1/p' "$SRC/hap_attachment_backup.py")"
 OLD=""
 [ -f "$DEST/hap_attachment_backup.py" ] && OLD="$(sed -n 's/^VERSION = "\(.*\)"/\1/p' "$DEST/hap_attachment_backup.py")"
-say "${OLD:+updating $OLD -> }installing version $VERSION to $DEST"
+if [ -n "$OLD" ]; then say "updating $DEST from $OLD to $VERSION"; else say "installing version $VERSION to $DEST"; fi
 
 mkdir -p "$DEST"
 install -m 0755 "$SRC/hap-attachment-backup.sh" "$SRC/install.sh" "$DEST/"
