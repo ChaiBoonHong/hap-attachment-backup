@@ -53,6 +53,38 @@ class SetsAndRetention(unittest.TestCase):
                              ["full-2026-10-08_0200", "full-2026-10-15_0200", "full-2026-10-22_0200"])
 
 
+class LogRotationCheck(unittest.TestCase):
+    def run_check(self, rotate_file_exists, tool):
+        lines = []
+        rep = hb.Report(lines.append)
+        old_exists, old_tool, old_file_log = hb.os.path.exists, hb.logrotate_path, hb.file_log
+        try:
+            hb.os.path.exists = lambda p: rotate_file_exists if p == hb.ROTATE_FILE else old_exists(p)
+            hb.logrotate_path = lambda: tool
+            hb.file_log = lambda *a, **k: None
+            with tempfile.TemporaryDirectory() as d:
+                hb.check_logging({"LOG_FILE": os.path.join(d, "t.log"), "LOG_LEVEL": "INFO"}, rep)
+        finally:
+            hb.os.path.exists, hb.logrotate_path, hb.file_log = old_exists, old_tool, old_file_log
+        return rep, "\n".join(lines)
+
+    def test_ok_when_installed(self):
+        rep, out = self.run_check(True, "/usr/sbin/logrotate")
+        self.assertEqual(rep.warns, 0)
+        self.assertIn("[ OK ] log rotation", out)
+
+    def test_warns_when_logrotate_missing(self):
+        rep, out = self.run_check(True, None)
+        self.assertEqual(rep.warns, 1)
+        self.assertIn("logrotate is not installed", out)
+        self.assertIn("apt install logrotate", out)
+
+    def test_warns_when_not_set_up(self):
+        rep, out = self.run_check(False, None)
+        self.assertEqual(rep.warns, 1)
+        self.assertIn("run install.sh again; also install it", out)
+
+
 class Config(unittest.TestCase):
     def test_load_conf(self):
         with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False) as f:

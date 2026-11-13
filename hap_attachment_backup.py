@@ -42,7 +42,7 @@ import threading
 import time
 import traceback
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MARK = "HAPBK\t"
 INFO_MARK = "HAPBK_INFO\t"
@@ -1140,10 +1140,23 @@ def check_logging(cfg, rep):
     if cfg["LOG_LEVEL"] == "DEBUG":
         rep.add("warn", "LOG_LEVEL=DEBUG logs every file and makes the log large",
                 "set LOG_LEVEL=INFO when troubleshooting is done; use --debug for a single run")
-    if os.path.exists(ROTATE_FILE):
-        rep.add("ok", f"log rotation: {ROTATE_FILE}")
+    tool = logrotate_path()
+    install_tool = "install it: apt install logrotate (Debian/Ubuntu) or dnf install logrotate (RHEL/CentOS)"
+    if not os.path.exists(ROTATE_FILE):
+        rep.add("warn", "log rotation is not set up",
+                "run install.sh again" + ("" if tool else "; also " + install_tool))
+    elif not tool:
+        rep.add("warn", "logrotate is not installed, so the log is never rotated and keeps growing", install_tool)
     else:
-        rep.add("warn", "log rotation is not set up", "run install.sh again")
+        rep.add("ok", f"log rotation: {ROTATE_FILE}")
+
+
+def logrotate_path():
+    """The logrotate program, or None. Cron's PATH may lack /usr/sbin, so look there too."""
+    for p in (shutil.which("logrotate"), "/usr/sbin/logrotate", "/sbin/logrotate"):
+        if p and os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
 
 
 def check_schedule(cfg, rep):

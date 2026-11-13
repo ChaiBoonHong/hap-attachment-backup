@@ -112,6 +112,10 @@ $LOG_FILE {
 }
 EOF
 say "log rotation $ROTATE_FILE (weekly, 8 weeks kept)"
+if ! command -v logrotate >/dev/null 2>&1 && [ ! -x /usr/sbin/logrotate ] && [ ! -x /sbin/logrotate ]; then
+  say "WARNING: logrotate is not installed, so the log will not be rotated."
+  say "         Install it: apt install logrotate (Debian/Ubuntu) or dnf install logrotate (RHEL/CentOS)"
+fi
 
 echo "$(date '+%F %T') [INFO] [install] version $VERSION installed to $DEST${OLD:+ (was $OLD)}" >> "$LOG_FILE"
 

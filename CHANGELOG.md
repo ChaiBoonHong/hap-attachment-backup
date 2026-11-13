@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1 - 2026-11-13
+
+- `--check` warns when `logrotate` is not installed (for example on minimal Debian 13 images), instead of reporting log rotation as OK while the log is never rotated. The installer prints the same warning.
+
 ## 1.1.0 - 2026-11-13
 
 - One-line install from GitHub (`get.sh`); installs to `/opt/hap-attachment-backup` with a `hap-attachment-backup` command.
