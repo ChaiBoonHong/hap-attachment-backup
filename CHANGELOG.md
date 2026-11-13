@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.0 - 2026-11-13
+
+- `logrotate` is now required. `install.sh` installs it with the system package manager (apt-get, dnf, yum, zypper or apk) when it is missing and turns on `logrotate.timer`; if it cannot be installed, the install stops before changing anything.
+- `--check` reports a missing `logrotate` as FAIL, and warns when logrotate does not run daily.
+
 ## 1.1.1 - 2026-11-13
 
 - `--check` warns when `logrotate` is not installed (for example on minimal Debian 13 images), instead of reporting log rotation as OK while the log is never rotated. The installer prints the same warning.

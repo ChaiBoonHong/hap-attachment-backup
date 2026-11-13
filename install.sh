@@ -5,6 +5,7 @@
 #   sudo bash install.sh --uninstall [INSTALL_DIR]   remove the script, schedule, log rotation and command;
 #                                                    backups and the log file are kept
 #
+# logrotate is required and is installed with the system package manager if missing.
 # An existing backup.conf is kept on update. Every step is printed and the result is
 # written to the backup log, so an install can be checked later.
 set -euo pipefail
@@ -57,6 +58,44 @@ command -v docker >/dev/null || die "docker not found - this tool backs up HAP r
 command -v python3 >/dev/null || die "python3 not found - install it: apt install python3 (Debian/Ubuntu) or dnf install python3 (RHEL)"
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' \
   || die "Python 3.8 or later is required, found $(python3 -V 2>&1)"
+
+# logrotate is required: it keeps the backup log small. Install it before changing anything else.
+have_logrotate() { command -v logrotate >/dev/null 2>&1 || [ -x /usr/sbin/logrotate ] || [ -x /sbin/logrotate ]; }
+PM_LOG="$(mktemp)"
+pm() { echo "+ $*" >>"$PM_LOG"; "$@" >>"$PM_LOG" 2>&1; }
+install_logrotate() {
+  if command -v apt-get >/dev/null 2>&1; then
+    pm env DEBIAN_FRONTEND=noninteractive apt-get install -y logrotate \
+      || { pm apt-get update && pm env DEBIAN_FRONTEND=noninteractive apt-get install -y logrotate; }
+  elif command -v dnf >/dev/null 2>&1; then pm dnf install -y logrotate
+  elif command -v yum >/dev/null 2>&1; then pm yum install -y logrotate
+  elif command -v zypper >/dev/null 2>&1; then pm zypper --non-interactive install logrotate
+  elif command -v apk >/dev/null 2>&1; then pm apk add logrotate
+  else echo "no supported package manager (apt-get, dnf, yum, zypper, apk)" >>"$PM_LOG"; return 1
+  fi
+}
+if have_logrotate; then
+  say "logrotate is installed"
+else
+  say "logrotate is not installed - installing it (required to keep the log small)"
+  if install_logrotate && have_logrotate; then
+    say "installed logrotate"
+  else
+    tail -n 6 "$PM_LOG" | sed 's/^/[install]   /' >&2
+    rm -f "$PM_LOG"
+    die "could not install logrotate, which is required. Install it yourself (apt install logrotate, dnf install logrotate, or the logrotate package from your OS media on a server without internet), then run install.sh again. Nothing was changed."
+  fi
+fi
+rm -f "$PM_LOG"
+if command -v systemctl >/dev/null 2>&1 && systemctl cat logrotate.timer >/dev/null 2>&1; then
+  systemctl is-enabled --quiet logrotate.timer 2>/dev/null || systemctl enable --now logrotate.timer >/dev/null 2>&1 || true
+  if systemctl is-enabled --quiet logrotate.timer 2>/dev/null; then say "logrotate runs daily (logrotate.timer)"
+  else say "WARNING: could not enable logrotate.timer - run: systemctl enable --now logrotate.timer"; fi
+elif [ -f /etc/cron.daily/logrotate ]; then
+  say "logrotate runs daily (/etc/cron.daily/logrotate)"
+else
+  say "WARNING: logrotate is installed but nothing runs it daily (no logrotate.timer or /etc/cron.daily/logrotate)"
+fi
 
 VERSION="$(sed -n 's/^VERSION = "\(.*\)"/\1/p' "$SRC/hap_attachment_backup.py")"
 OLD=""
@@ -112,10 +151,6 @@ $LOG_FILE {
 }
 EOF
 say "log rotation $ROTATE_FILE (weekly, 8 weeks kept)"
-if ! command -v logrotate >/dev/null 2>&1 && [ ! -x /usr/sbin/logrotate ] && [ ! -x /sbin/logrotate ]; then
-  say "WARNING: logrotate is not installed, so the log will not be rotated."
-  say "         Install it: apt install logrotate (Debian/Ubuntu) or dnf install logrotate (RHEL/CentOS)"
-fi
 
 echo "$(date '+%F %T') [INFO] [install] version $VERSION installed to $DEST${OLD:+ (was $OLD)}" >> "$LOG_FILE"
 

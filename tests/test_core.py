@@ -54,35 +54,42 @@ class SetsAndRetention(unittest.TestCase):
 
 
 class LogRotationCheck(unittest.TestCase):
-    def run_check(self, rotate_file_exists, tool):
+    def run_check(self, rotate_file_exists, tool, schedule="logrotate.timer"):
         lines = []
         rep = hb.Report(lines.append)
-        old_exists, old_tool, old_file_log = hb.os.path.exists, hb.logrotate_path, hb.file_log
+        saved = hb.os.path.exists, hb.logrotate_path, hb.logrotate_schedule, hb.file_log
+        old_exists = saved[0]
         try:
             hb.os.path.exists = lambda p: rotate_file_exists if p == hb.ROTATE_FILE else old_exists(p)
             hb.logrotate_path = lambda: tool
+            hb.logrotate_schedule = lambda: schedule
             hb.file_log = lambda *a, **k: None
             with tempfile.TemporaryDirectory() as d:
                 hb.check_logging({"LOG_FILE": os.path.join(d, "t.log"), "LOG_LEVEL": "INFO"}, rep)
         finally:
-            hb.os.path.exists, hb.logrotate_path, hb.file_log = old_exists, old_tool, old_file_log
+            hb.os.path.exists, hb.logrotate_path, hb.logrotate_schedule, hb.file_log = saved
         return rep, "\n".join(lines)
 
-    def test_ok_when_installed(self):
+    def test_ok_when_installed_and_scheduled(self):
         rep, out = self.run_check(True, "/usr/sbin/logrotate")
-        self.assertEqual(rep.warns, 0)
+        self.assertEqual((rep.fails, rep.warns), (0, 0))
         self.assertIn("[ OK ] log rotation", out)
 
-    def test_warns_when_logrotate_missing(self):
+    def test_fails_when_logrotate_missing(self):
         rep, out = self.run_check(True, None)
-        self.assertEqual(rep.warns, 1)
-        self.assertIn("logrotate is not installed", out)
-        self.assertIn("apt install logrotate", out)
+        self.assertEqual((rep.fails, rep.warns), (1, 0))
+        self.assertIn("[FAIL] logrotate is not installed (required)", out)
+        self.assertIn("run install.sh again (it installs logrotate)", out)
 
     def test_warns_when_not_set_up(self):
-        rep, out = self.run_check(False, None)
-        self.assertEqual(rep.warns, 1)
-        self.assertIn("run install.sh again; also install it", out)
+        rep, out = self.run_check(False, "/usr/sbin/logrotate")
+        self.assertEqual((rep.fails, rep.warns), (0, 1))
+        self.assertIn("log rotation is not set up", out)
+
+    def test_warns_when_not_scheduled(self):
+        rep, out = self.run_check(True, "/usr/sbin/logrotate", schedule=None)
+        self.assertEqual((rep.fails, rep.warns), (0, 1))
+        self.assertIn("systemctl enable --now logrotate.timer", out)
 
 
 class Config(unittest.TestCase):

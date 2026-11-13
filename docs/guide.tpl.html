@@ -258,7 +258,7 @@ footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
             <tr><td>HAP standalone in Docker</td><td>Tested with HAP 7.4.5. Containers are found by image: <code>nocoly/sc</code> + <code>nocoly/hap</code>, or <code>mingdaoyun-sc</code> + <code>mingdaoyun-community</code>.</td></tr>
             <tr><td>Root access</td><td><code>sudo</code> on the HAP server</td></tr>
             <tr><td><code>python3</code> 3.8 or later</td><td>Standard on current Debian, Ubuntu, RHEL and Rocky. <code>apt install python3</code> or <code>dnf install python3</code>.</td></tr>
-            <tr><td><code>logrotate</code></td><td>Keeps the log small. Missing on some minimal images; <code>--check</code> warns. <code>apt install logrotate</code> or <code>dnf install logrotate</code>.</td></tr>
+            <tr><td><code>logrotate</code></td><td>Required; keeps the log small. The installer installs it when missing. Without internet or a package mirror, install the <code>logrotate</code> package from OS media first.</td></tr>
             <tr><td><code>curl</code> or <code>wget</code></td><td>For the one-line install. Not needed for the offline install.</td></tr>
             <tr><td>Disk space</td><td>Room for the attachments several times over: 4 weekly full copies are kept by default. A separate disk is best.</td></tr>
           </tbody>
@@ -267,14 +267,14 @@ footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
 
       <section id="step-1">
         <div class="section-head"><span class="step-no">1</span><h2>Install</h2></div>
-        <p class="measure">On the client's HAP server, as root. The installer downloads the latest release, installs it, sets up the schedule and log rotation, and runs the system check.</p>
+        <p class="measure">On the client's HAP server, as root. The installer downloads the latest release, installs it, installs <code>logrotate</code> if it is missing, sets up the schedule and log rotation, and runs the system check.</p>
         <div class="code"><button class="copy" type="button">Copy</button><pre><code>curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash</code></pre></div>
         <div class="options">
           <div class="option">
             <h3>Options</h3>
             <p>Add them after <code>bash -s --</code>:</p>
             <div class="code"><button class="copy" type="button">Copy</button><pre><code>G=https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh
-curl -fsSL $G | sudo bash -s -- --version v1.1.1   # a given release
+curl -fsSL $G | sudo bash -s -- --version v1.2.0   # a given release
 curl -fsSL $G | sudo bash -s -- --no-cron          # no schedule
 curl -fsSL $G | sudo bash -s -- /srv/hap-backup    # another install folder</code></pre></div>
           </div>
@@ -296,6 +296,7 @@ sudo bash hap-attachment-backup-@@VERSION@@/install.sh</code></pre></div>
             <tr><td><code>/etc/cron.d/hap-attachment-backup</code></td><td>Nightly and weekly schedule</td></tr>
             <tr><td><code>/etc/logrotate.d/hap-attachment-backup</code></td><td>Rotates the log weekly, keeps 8 weeks</td></tr>
             <tr><td><code>/var/log/hap-attachment-backup.log</code></td><td>Log of every run</td></tr>
+            <tr><td><code>logrotate</code> package</td><td>Installed if missing, with <code>logrotate.timer</code> turned on; left in place on uninstall</td></tr>
           </tbody>
         </table></div>
       </section>
@@ -304,7 +305,7 @@ sudo bash hap-attachment-backup-@@VERSION@@/install.sh</code></pre></div>
         <div class="section-head"><span class="step-no">2</span><h2>Check the server</h2></div>
         <p class="measure">The installer already ran this. Run it again after any change. Every <code>[FAIL]</code> and <code>[WARN]</code> line comes with a <code>fix:</code> line.</p>
         <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo hap-attachment-backup --check</code></pre></div>
-        <div class="code out has-label"><span class="label">a healthy server</span><pre><code>HAP attachment backup 1.1.1 - system check on hap-prod-01, 2026-11-13 10:33:24
+        <div class="code out has-label"><span class="label">a healthy server</span><pre><code>HAP attachment backup 1.2.0 - system check on hap-prod-01, 2026-11-13 10:33:24
 settings: /opt/hap-attachment-backup/backup.conf
 
 [ OK ] running as root
@@ -367,7 +368,7 @@ sudo hap-attachment-backup --check</code></pre></div>
         <div class="section-head"><span class="step-no">4</span><h2>Dry run</h2></div>
         <p class="measure">Lists what would be copied, per worksheet, and which attachments have no file. Nothing is written. Add <code>--debug</code> to see every file and the counts per field.</p>
         <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo hap-attachment-backup --dry-run</code></pre></div>
-        <div class="code out has-label"><span class="label">example output</span><pre><code>[INFO] start: backup mode=incremental (dry run) - version 1.1.1, host hap-prod-01, user root, pid 247006, terminal
+        <div class="code out has-label"><span class="label">example output</span><pre><code>[INFO] start: backup mode=incremental (dry run) - version 1.2.0, host hap-prod-01, user root, pid 247006, terminal
 [WARNING] no earlier backup found in /data/hap-attachment-backup - running a full backup instead
 [INFO] HAP 7.4.5 (nocoly/hap:7.4.5); MongoDB container script-sc-1 (mongo), app container script-app-1, storage alias file
 [INFO] MongoDB export: 2480 file references in 1.4s
@@ -441,7 +442,7 @@ timedatectl | grep 'Time zone'</code></pre></div>
           </tbody>
         </table></div>
         <p class="measure">Each line has a time, a level and a run ID, so one run's lines can be picked out with <code>grep</code>. Start-up failures, such as a missing <code>python3</code>, are written to the log by the wrapper script.</p>
-        <div class="code out has-label"><span class="label">/var/log/hap-attachment-backup.log</span><pre><code>2026-11-14 02:00:01 [INFO] [20261114-020001-24817] start: backup mode=incremental - version 1.1.1, host hap-prod-01, user root, pid 24817, no terminal (cron or script)
+        <div class="code out has-label"><span class="label">/var/log/hap-attachment-backup.log</span><pre><code>2026-11-14 02:00:01 [INFO] [20261114-020001-24817] start: backup mode=incremental - version 1.2.0, host hap-prod-01, user root, pid 24817, no terminal (cron or script)
 2026-11-14 02:00:01 [INFO] [20261114-020001-24817] HAP 7.4.5 (nocoly/hap:7.4.5); MongoDB container script-sc-1 (mongo), app container script-app-1, storage alias file
 2026-11-14 02:00:02 [INFO] [20261114-020001-24817] MongoDB export: 2492 file references in 1.4s
 2026-11-14 02:00:02 [INFO] [20261114-020001-24817] mode=incr: 2492 file references in active records, 2489 with files, 3 without, 12 to copy (8.4 MB)
@@ -494,7 +495,8 @@ sudo grep -E '\[(ERROR|WARNING)\]' /var/log/hap-attachment-backup.log | tail -20
             <tr><td class="wrap-code"><code>backup.conf line N: unknown setting</code></td><td>Typo in a setting name</td><td>Correct it; the line is ignored until then</td></tr>
             <tr><td class="wrap-code"><code>[wrapper] python3 not found</code></td><td>Python missing or older than 3.8</td><td><code>apt install python3</code> or <code>dnf install python3</code></td></tr>
             <tr><td>No run at 02:00</td><td>Cron stopped or schedule missing</td><td><code>--check</code> shows both; <code>systemctl enable --now cron</code> (or <code>crond</code>)</td></tr>
-            <tr><td class="wrap-code"><code>logrotate is not installed</code></td><td>Minimal server image without logrotate; the log is never rotated</td><td><code>apt install logrotate</code> or <code>dnf install logrotate</code></td></tr>
+            <tr><td class="wrap-code"><code>could not install logrotate</code> or <code>[FAIL] logrotate is not installed</code></td><td>The package manager cannot reach a repository, or logrotate was removed</td><td><code>apt install logrotate</code> or <code>dnf install logrotate</code> (or from OS media), then run <code>install.sh</code> again</td></tr>
+            <tr><td class="wrap-code"><code>logrotate is installed but does not run daily</code></td><td><code>logrotate.timer</code> is disabled</td><td><code>systemctl enable --now logrotate.timer</code></td></tr>
             <tr><td>Files land on the wrong record</td><td>Title not unique, or contains <code>_</code></td><td>Use <code>record_id</code> in <code>manifest.csv</code>, or make titles unique</td></tr>
           </tbody>
         </table></div>

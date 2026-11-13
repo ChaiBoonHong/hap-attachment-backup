@@ -42,7 +42,7 @@ import threading
 import time
 import traceback
 
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MARK = "HAPBK\t"
 INFO_MARK = "HAPBK_INFO\t"
@@ -1140,13 +1140,15 @@ def check_logging(cfg, rep):
     if cfg["LOG_LEVEL"] == "DEBUG":
         rep.add("warn", "LOG_LEVEL=DEBUG logs every file and makes the log large",
                 "set LOG_LEVEL=INFO when troubleshooting is done; use --debug for a single run")
-    tool = logrotate_path()
-    install_tool = "install it: apt install logrotate (Debian/Ubuntu) or dnf install logrotate (RHEL/CentOS)"
-    if not os.path.exists(ROTATE_FILE):
-        rep.add("warn", "log rotation is not set up",
-                "run install.sh again" + ("" if tool else "; also " + install_tool))
-    elif not tool:
-        rep.add("warn", "logrotate is not installed, so the log is never rotated and keeps growing", install_tool)
+    if not logrotate_path():
+        rep.add("fail", "logrotate is not installed (required), so the log is never rotated",
+                "run install.sh again (it installs logrotate), or: apt install logrotate (Debian/Ubuntu) "
+                "or dnf install logrotate (RHEL/CentOS)")
+    elif not os.path.exists(ROTATE_FILE):
+        rep.add("warn", "log rotation is not set up", "run install.sh again")
+    elif not logrotate_schedule():
+        rep.add("warn", "logrotate is installed but does not run daily",
+                "systemctl enable --now logrotate.timer (or check /etc/cron.daily/logrotate)")
     else:
         rep.add("ok", f"log rotation: {ROTATE_FILE}")
 
@@ -1157,6 +1159,21 @@ def logrotate_path():
         if p and os.path.isfile(p) and os.access(p, os.X_OK):
             return p
     return None
+
+
+def logrotate_schedule():
+    """What runs logrotate daily: 'logrotate.timer', '/etc/cron.daily/logrotate', or None."""
+    if shutil.which("systemctl"):
+        try:
+            p = run(["systemctl", "is-enabled", "logrotate.timer"], timeout=15)
+        except RuntimeError:
+            p = None
+        if p is not None:
+            if p.returncode == 0:
+                return "logrotate.timer"
+            if p.stdout.strip() in ("disabled", "masked"):
+                return None  # the timer exists but is off; the cron.daily script then defers to it
+    return "/etc/cron.daily/logrotate" if os.path.exists("/etc/cron.daily/logrotate") else None
 
 
 def check_schedule(cfg, rep):

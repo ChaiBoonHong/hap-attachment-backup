@@ -24,12 +24,12 @@ On the HAP server, as root:
 curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash
 ```
 
-This downloads the latest release, installs it to `/opt/hap-attachment-backup`, adds the `hap-attachment-backup` command, sets up the nightly schedule and log rotation, and runs `--check`.
+This downloads the latest release, installs it to `/opt/hap-attachment-backup`, adds the `hap-attachment-backup` command, installs `logrotate` if it is missing, sets up the nightly schedule and log rotation, and runs `--check`.
 
 Options go after `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash -s -- --version v1.1.1   # a given release
+curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash -s -- --version v1.2.0   # a given release
 curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash -s -- --no-cron          # no schedule
 curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash -s -- /srv/hap-backup    # another folder
 ```
@@ -37,9 +37,9 @@ curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/
 Without the one-liner (for example on a server without internet access, copy the release file over first):
 
 ```bash
-curl -fsSLO https://github.com/ChaiBoonHong/hap-attachment-backup/archive/refs/tags/v1.1.1.tar.gz
-tar xzf v1.1.1.tar.gz
-sudo bash hap-attachment-backup-1.1.1/install.sh
+curl -fsSLO https://github.com/ChaiBoonHong/hap-attachment-backup/archive/refs/tags/v1.2.0.tar.gz
+tar xzf v1.2.0.tar.gz
+sudo bash hap-attachment-backup-1.2.0/install.sh
 ```
 
 Or with git: `git clone https://github.com/ChaiBoonHong/hap-attachment-backup.git && sudo bash hap-attachment-backup/install.sh`
@@ -47,7 +47,8 @@ Or with git: `git clone https://github.com/ChaiBoonHong/hap-attachment-backup.gi
 ### Requirements
 
 - Linux server running **HAP standalone in Docker** (tested with HAP 7.4.5 on Debian 13), with root access.
-- `docker`, `python3` 3.8 or later, `bash`, `curl` or `wget`, and `logrotate` to keep the log small (`--check` warns if it is missing).
+- `docker`, `python3` 3.8 or later, `bash`, `curl` or `wget`.
+- `logrotate` (required, keeps the log small). The installer installs it when it is missing; on a server without internet or a package mirror, install the `logrotate` package from your OS media first.
 - The HAP MongoDB container (`nocoly/sc` or `mingdaoyun-sc`) with the `mongo` or `mongosh` shell, and the HAP app container (`nocoly/hap` or `mingdaoyun-community`) with the `mc` storage client. Both are standard in HAP standalone; `--check` confirms them.
 - Disk space for your attachments several times over (one full copy per week is kept for 4 weeks by default).
 
@@ -64,7 +65,7 @@ sudo hap-attachment-backup --status     # backup sets, last run, schedule
 A healthy `--check`:
 
 ```
-HAP attachment backup 1.1.1 - system check on hap-prod-01, 2026-11-13 10:33:24
+HAP attachment backup 1.2.0 - system check on hap-prod-01, 2026-11-13 10:33:24
 settings: /opt/hap-attachment-backup/backup.conf
 
 [ OK ] running as root
@@ -132,7 +133,7 @@ Add `--debug` to any command to log every command and every file for that run, o
 Each log line has a time, a level and a run ID, so the lines of one run can be picked out with `grep`:
 
 ```
-2026-11-13 02:00:01 [INFO] [20261113-020001-24817] start: backup mode=incremental - version 1.1.1, host hap-prod-01, user root, pid 24817, no terminal (cron or script)
+2026-11-13 02:00:01 [INFO] [20261113-020001-24817] start: backup mode=incremental - version 1.2.0, host hap-prod-01, user root, pid 24817, no terminal (cron or script)
 2026-11-13 02:00:01 [INFO] [20261113-020001-24817] HAP 7.4.5 (nocoly/hap:7.4.5); MongoDB container script-sc-1 (mongo), app container script-app-1, storage alias file
 2026-11-13 02:00:02 [INFO] [20261113-020001-24817] MongoDB export: 2480 file references in 1.4s
 2026-11-13 02:00:02 [INFO] [20261113-020001-24817] mode=incr: 2480 file references in active records, 2477 with files, 3 without, 12 to copy (8.4 MB)
@@ -178,7 +179,8 @@ Start with `sudo hap-attachment-backup --check`. Common messages:
 | `backup.conf line N: unknown setting` | Typo in a setting name | Correct it; the line is ignored until then |
 | `python3 not found` / `Python 3.8 or later is required` | Old or missing Python | `apt install python3` or `dnf install python3` |
 | No run at 02:00 | Cron stopped or schedule missing | `--check` shows both; `systemctl enable --now cron` (or `crond`) |
-| `logrotate is not installed` | Minimal server image without logrotate; the log is never rotated | `apt install logrotate` or `dnf install logrotate` |
+| `could not install logrotate` (installer) or `[FAIL] logrotate is not installed` | The package manager cannot reach a repository, or logrotate was removed | `apt install logrotate` or `dnf install logrotate` (or from OS media), then run `install.sh` again |
+| `logrotate is installed but does not run daily` | `logrotate.timer` is disabled | `systemctl enable --now logrotate.timer` |
 
 ## Settings
 
@@ -285,6 +287,7 @@ sudo bash /opt/hap-attachment-backup/install.sh --uninstall
 | `/etc/cron.d/hap-attachment-backup` | Schedule |
 | `/etc/logrotate.d/hap-attachment-backup` | Log rotation |
 | `/var/log/hap-attachment-backup.log` | Log |
+| `logrotate` package | Installed if missing, with `logrotate.timer` turned on; left in place on uninstall |
 | `/data/hap-attachment-backup/` | Backups |
 
 MongoDB and storage are only read. `--restore-storage` writes to storage, and only files that are missing. Run `--dry-run` after each HAP upgrade: an upgrade can change how attachments are stored.
