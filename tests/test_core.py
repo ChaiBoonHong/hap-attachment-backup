@@ -121,3 +121,67 @@ class Config(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RecordFolders(unittest.TestCase):
+    CFG = dict(CFG, RECORD_FOLDERS=True)
+
+    def test_off_by_default(self):
+        f = hb.Folders()
+        ref = {"appId": "a1", "app": "AP", "wsId": "w1", "ws": "DO Log", "rowId": "r1", "title": "DO-1"}
+        self.assertEqual(f.dest(ref, CFG), os.path.join("AP", "DO Log"))
+
+    def test_title_folder_and_duplicate_titles(self):
+        f = hb.Folders()
+        a = {"appId": "a1", "app": "AP", "wsId": "w1", "ws": "DO Log", "rowId": "row-aaaaaa", "title": "DO/1"}
+        b = dict(a, rowId="row-bbbbbb")
+        self.assertEqual(f.dest(a, self.CFG), os.path.join("AP", "DO Log", "DO-1"))
+        self.assertEqual(f.dest(a, self.CFG), os.path.join("AP", "DO Log", "DO-1"))
+        self.assertEqual(f.dest(b, self.CFG), os.path.join("AP", "DO Log", "DO-1 (bbbbbb)"))
+        self.assertEqual(f.dest(dict(a, rowId="r9", title=""), self.CFG), os.path.join("AP", "DO Log", "r9"))
+
+    def test_setting_values(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "backup.conf")
+            for val, want in (("yes", True), ("no", False), ("", False)):
+                with open(p, "w") as fh:
+                    fh.write(f"RECORD_FOLDERS={val}\n")
+                self.assertIs(hb.load_conf(p)[0]["RECORD_FOLDERS"], want)
+            with open(p, "w") as fh:
+                fh.write("RECORD_FOLDERS=maybe\n")
+            with self.assertRaises(hb.ConfigError):
+                hb.load_conf(p)
+
+
+class FindRemoved(unittest.TestCase):
+    def row(self, rid, fid, name="a.pdf", size="10", title="T1"):
+        return {"record_id": rid, "field_id": "f1", "file_id": fid, "original_name": name, "size": size,
+                "title": title}
+
+    def test_removed_rows(self):
+        backed = [self.row("r1", "x1"), self.row("r1", "x2", "b.pdf"), self.row("r2", "x3", "c.pdf", "7")]
+        refs = [{"rowId": "r1", "fieldId": "f1", "fid": "x1"},                              # still there
+                {"rowId": "r2", "fieldId": "f1", "fid": "new", "oname": "C.pdf", "size": 7}]  # uploaded again
+        self.assertEqual([r["file_id"] for r in hb.removed_rows(backed, refs)], ["x2"])
+
+    def test_status(self):
+        r = self.row("r1", "x1")
+        self.assertEqual(hb.removed_status(r, True, 1, "_"), "removed from record")
+        self.assertIn("recycle bin", hb.removed_status(r, True, 9, "_"))
+        self.assertIn("record deleted", hb.removed_status(r, True, None, "_"))
+        self.assertIn("field deleted", hb.removed_status(r, False, 1, "_"))
+        self.assertIn("attach by hand", hb.removed_status(self.row("r1", "x1", title="A_B"), True, 1, "_"))
+
+    def test_reimported_file_counts_as_present(self):
+        # Import Attachments keeps the uploaded name: '<title>_<original name>', new file ID
+        backed = [self.row("r1", "x1", "Plan", "10", title="DO-1")]
+        refs = [{"rowId": "r1", "fieldId": "f1", "fid": "new", "oname": "DO-1_Plan", "size": 10, "title": "DO-1"}]
+        self.assertEqual(hb.removed_rows(backed, refs, "_"), [])
+
+
+class ReimportedName(unittest.TestCase):
+    def test_title_not_doubled(self):
+        ref = {"fid": "f1", "title": "DO-1", "name": "x.pdf", "oname": "DO-1_Invoice"}
+        self.assertEqual(hb.file_name(ref, CFG), "DO-1_Invoice.pdf")
+        ref = {"fid": "f1", "title": "DO-1", "name": "x.pdf", "oname": "DO-1_"}
+        self.assertEqual(hb.file_name(ref, CFG), "DO-1_DO-1_.pdf")

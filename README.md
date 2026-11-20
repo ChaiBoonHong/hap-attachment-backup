@@ -29,7 +29,7 @@ This downloads the latest release, installs it to `/opt/hap-attachment-backup`, 
 Options go after `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash -s -- --version v1.2.0   # a given release
+curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash -s -- --version v1.3.0   # a given release
 curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash -s -- --no-cron          # no schedule
 curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash -s -- /srv/hap-backup    # another folder
 ```
@@ -37,9 +37,9 @@ curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/
 Without the one-liner (for example on a server without internet access, copy the release file over first):
 
 ```bash
-curl -fsSLO https://github.com/ChaiBoonHong/hap-attachment-backup/archive/refs/tags/v1.2.0.tar.gz
-tar xzf v1.2.0.tar.gz
-sudo bash hap-attachment-backup-1.2.0/install.sh
+curl -fsSLO https://github.com/ChaiBoonHong/hap-attachment-backup/archive/refs/tags/v1.3.0.tar.gz
+tar xzf v1.3.0.tar.gz
+sudo bash hap-attachment-backup-1.3.0/install.sh
 ```
 
 Or with git: `git clone https://github.com/ChaiBoonHong/hap-attachment-backup.git && sudo bash hap-attachment-backup/install.sh`
@@ -65,7 +65,7 @@ sudo hap-attachment-backup --status     # backup sets, last run, schedule
 A healthy `--check`:
 
 ```
-HAP attachment backup 1.2.0 - system check on hap-prod-01, 2026-11-13 10:33:24
+HAP attachment backup 1.3.0 - system check on hap-prod-01, 2026-11-13 10:33:24
 settings: /opt/hap-attachment-backup/backup.conf
 
 [ OK ] running as root
@@ -104,6 +104,7 @@ result: 0 failed, 1 warnings - ready to back up
 | `hap-attachment-backup --full` | Copies every attachment into a new `full-YYYY-MM-DD_HHMM` set. |
 | `hap-attachment-backup` or `--incremental` | Copies only files not in earlier sets into `incr-YYYY-MM-DD_HHMM`. Runs a full copy if there is none yet; writes no set when nothing is new. |
 | `hap-attachment-backup --verify [SET]` | Re-checks every file in a set against `manifest.csv` (default: newest set). |
+| `hap-attachment-backup --find-removed [SET] [--dry-run]` | Finds attachments removed from records since they were backed up and copies just those files into a `restore-<date>` folder for HAP Import Attachments. Filters: `--app`, `--worksheet`, `--field`, `--record` (title or ID). Default: all sets. |
 | `hap-attachment-backup --restore-storage SET [--dry-run]` | Puts files back into HAP storage at their original path, only where they are missing. Never overwrites. |
 | `hap-attachment-backup --status` | Backup sets with file counts and sizes, last run, whether a run is active, schedule. |
 | `hap-attachment-backup --log [N]` | The log of the last backup run, or the last N log lines. |
@@ -133,7 +134,7 @@ Add `--debug` to any command to log every command and every file for that run, o
 Each log line has a time, a level and a run ID, so the lines of one run can be picked out with `grep`:
 
 ```
-2026-11-13 02:00:01 [INFO] [20261113-020001-24817] start: backup mode=incremental - version 1.2.0, host hap-prod-01, user root, pid 24817, no terminal (cron or script)
+2026-11-13 02:00:01 [INFO] [20261113-020001-24817] start: backup mode=incremental - version 1.3.0, host hap-prod-01, user root, pid 24817, no terminal (cron or script)
 2026-11-13 02:00:01 [INFO] [20261113-020001-24817] HAP 7.4.5 (nocoly/hap:7.4.5); MongoDB container script-sc-1 (mongo), app container script-app-1, storage alias file
 2026-11-13 02:00:02 [INFO] [20261113-020001-24817] MongoDB export: 2480 file references in 1.4s
 2026-11-13 02:00:02 [INFO] [20261113-020001-24817] mode=incr: 2480 file references in active records, 2477 with files, 3 without, 12 to copy (8.4 MB)
@@ -178,6 +179,7 @@ Start with `sudo hap-attachment-backup --check`. Common messages:
 | `not enough disk space` | Free space would drop below `MIN_FREE_PCT` | Free space, lower `KEEP_FULL`, or move `BACKUP_DIR` |
 | `backup.conf line N: unknown setting` | Typo in a setting name | Correct it; the line is ignored until then |
 | `python3 not found` / `Python 3.8 or later is required` | Old or missing Python | `apt install python3` or `dnf install python3` |
+| `restore-storage: 0 restored, N already in storage` | The attachments were removed from records; their files are still in storage | Use `--find-removed` (Restore A) |
 | No run at 02:00 | Cron stopped or schedule missing | `--check` shows both; `systemctl enable --now cron` (or `crond`) |
 | `could not install logrotate` (installer) or `[FAIL] logrotate is not installed` | The package manager cannot reach a repository, or logrotate was removed | `apt install logrotate` or `dnf install logrotate` (or from OS media), then run `install.sh` again |
 | `logrotate is installed but does not run daily` | `logrotate.timer` is disabled | `systemctl enable --now logrotate.timer` |
@@ -199,6 +201,7 @@ Start with `sudo hap-attachment-backup --check`. Common messages:
 | `MINIO_ALIAS` | `file` | Storage alias of `mc` in the app container |
 | `DELIMITER` | `_` | Between title and file name; use the same in Import Attachments |
 | `TITLE_MAX_CHARS`, `NAME_MAX_CHARS` | `100`, `150` | Longer titles and names are shortened |
+| `RECORD_FOLDERS` | `no` | `yes` puts each record's files in a folder named after its title: `<App>/<Worksheet>/<title>/<title>_<file>` |
 | `INCLUDE_APPS`, `EXCLUDE_APPS` | empty | Comma-separated app IDs or names; empty means all apps |
 | `LOG_FILE` | `/var/log/hap-attachment-backup.log` | Log file |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR` |
@@ -223,31 +226,61 @@ The first two fields are minute and hour: `30 3 * * 0` is Sunday 03:30. Output g
   last_run.json                 # result of the last backup run
   full-2026-11-15_0200/         # Sunday full copy
     <App>/<Worksheet>/<Title>_<Original name>.<ext>
+                                # RECORD_FOLDERS=yes: <App>/<Worksheet>/<Title>/<Title>_<Original name>.<ext>
     manifest.csv                # every file: record ID, title, original name, storage path, SHA-256
     missing.csv                 # attachments that could not be backed up, with the reason
     summary.txt                 # counts, version, HAP version, exit code
     run.log                     # log of this run
   incr-2026-11-16_0200/         # nightly: only files not backed up before
+  restore-2026-11-20_093015/    # made by --find-removed; delete it after the import
 ```
 
 To restore everything as of a given night, use the latest full set before that night plus every nightly set after it. Both CSV files open in Excel.
 
-**File names.** `<title><DELIMITER><original name>.<ext>`, the extension taken from the stored file. `\ / : * ? " < > |` and control characters become `-`. An empty title is replaced by the record ID. A name already used in the same worksheet folder gets ` (2)`, ` (3)`. The `note` column in `manifest.csv` flags empty titles and titles that contain the delimiter.
+**File names.** `<title><DELIMITER><original name>.<ext>`, the extension taken from the stored file. `\ / : * ? " < > |` and control characters become `-`. An empty title is replaced by the record ID. A name already used in the same folder gets ` (2)`, ` (3)`. With `RECORD_FOLDERS=yes`, two records with the same title get `Title` and `Title (<last 6 characters of the record ID>)` folders. The `note` column in `manifest.csv` flags empty titles and titles that contain the delimiter.
 
 ## Restore
 
-### A. Import Attachments in HAP (records exist, files are missing)
+| What happened | Use |
+|---|---|
+| Attachments were removed from records (the records still exist) | **A.** `--find-removed`, then Import Attachments |
+| A whole worksheet's files are needed again, for example after restoring an app from a HAP backup | **B.** Import Attachments with the set's worksheet folder |
+| HAP's file storage was lost or damaged, records are intact | **C.** `--restore-storage` |
+| A record was deleted | Restore it from HAP's recycle bin; its attachments come back with it |
+
+Removing an attachment from a record only removes the link: the file stays in HAP storage. That is why `--restore-storage` reports `0 restored, N already in storage` in that case. Use A.
+
+### A. Put removed attachments back on their records
+
+```bash
+sudo hap-attachment-backup --find-removed --dry-run                   # list what was removed, all sets
+sudo hap-attachment-backup --find-removed --worksheet "Submission Details"   # copy those files for import
+```
+
+It compares the backup sets with HAP now and copies only the files that are no longer on their record into `/data/hap-attachment-backup/restore-<date>/<App>/<Worksheet>/<Field>/`, with `removed.csv` (every file and its status) and `HOW-TO-IMPORT.txt`. Then, for each field folder:
+
+1. Copy the folder to your PC (WinSCP, or `scp`).
+2. In HAP, open the worksheet, then **Import** > **Import Attachments**.
+3. **File Name Matching Field**: the title field. **Delimiter**: `_`. **Target field**: the folder's field. **Write mode**: **Append**.
+4. Upload the files and click **Start Import**. Folders over 100 files or 2 GB are split into `part-01`, `part-02`, ...
+5. Delete the restore folder on the server when done.
+
+Files whose record title contains the delimiter are put in `attach-by-hand/`, since Import Attachments would match the wrong part of the name. Records in the recycle bin or deleted are listed in `removed.csv` but not copied. A file that was removed and uploaded again (same name and size) counts as still there.
+
+Import Attachments keeps the uploaded file name, so a restored attachment shows in HAP as `<title>_<original name>`. The tool recognises this: the file is not reported as removed again, and its next backup is named `<title>_<original name>`, not `<title>_<title>_...`.
+
+### B. Import Attachments in HAP (a whole worksheet)
 
 1. Copy the worksheet folder `<set>/<App>/<Worksheet>/` to your PC (`scp`, or `tar` it first).
 2. In HAP, open the worksheet, then **Import** > **Import Attachments**.
 3. Upload the files: up to 100 files and 2 GB per upload.
 4. **File Name Matching Field**: the worksheet's title field. **Delimiter**: `_`.
 5. **Target field**: the attachment field (the `field` column in `manifest.csv`).
-6. **Write mode**: Append adds files; Overwrite replaces the field's files and cannot be undone.
+6. **Write mode**: Append adds files (files still on a record are added a second time); Overwrite replaces the field's files and cannot be undone.
 
 Titles must be unique for files to land on the right record. If two records share a title, or a title contains `_`, use `record_id` in `manifest.csv`.
 
-### B. Put files back into HAP storage (storage lost, records intact)
+### C. Put files back into HAP storage (storage lost, records intact)
 
 ```bash
 sudo hap-attachment-backup --restore-storage full-2026-11-15_0200 --dry-run

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0 - 2026-11-20
+
+- `--find-removed [SET]`: finds attachments that were removed from records since they were backed up, and copies just those files into `BACKUP_DIR/restore-<date>/<App>/<Worksheet>/<Field>/` with a `removed.csv` list and `HOW-TO-IMPORT.txt`, ready for HAP Import Attachments (write mode Append). Filters: `--app`, `--worksheet`, `--field`, `--record`. Records in the recycle bin or deleted are listed, not staged.
+- `RECORD_FOLDERS=yes` saves each record's files in a folder named after the record title: `<App>/<Worksheet>/<title>/<title>_<file name>`. Default `no` (unchanged layout).
+- `--restore-storage` now explains when nothing was restored because every file is still in storage (removing an attachment from a record leaves the file in storage).
+- `--status` lists restore folders that are still on disk.
+- Files put back by Import Attachments (HAP names them `<title>_<original name>`) are recognised: `--find-removed` does not report them again, and backups no longer name them `<title>_<title>_...`.
+
 ## 1.2.0 - 2026-11-13
 
 - `logrotate` is now required. `install.sh` installs it with the system package manager (apt-get, dnf, yum, zypper or apk) when it is missing and turns on `logrotate.timer`; if it cannot be installed, the install stops before changing anything.

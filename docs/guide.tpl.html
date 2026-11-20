@@ -274,7 +274,7 @@ footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
             <h3>Options</h3>
             <p>Add them after <code>bash -s --</code>:</p>
             <div class="code"><button class="copy" type="button">Copy</button><pre><code>G=https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh
-curl -fsSL $G | sudo bash -s -- --version v1.2.0   # a given release
+curl -fsSL $G | sudo bash -s -- --version v1.3.0   # a given release
 curl -fsSL $G | sudo bash -s -- --no-cron          # no schedule
 curl -fsSL $G | sudo bash -s -- /srv/hap-backup    # another install folder</code></pre></div>
           </div>
@@ -305,7 +305,7 @@ sudo bash hap-attachment-backup-@@VERSION@@/install.sh</code></pre></div>
         <div class="section-head"><span class="step-no">2</span><h2>Check the server</h2></div>
         <p class="measure">The installer already ran this. Run it again after any change. Every <code>[FAIL]</code> and <code>[WARN]</code> line comes with a <code>fix:</code> line.</p>
         <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo hap-attachment-backup --check</code></pre></div>
-        <div class="code out has-label"><span class="label">a healthy server</span><pre><code>HAP attachment backup 1.2.0 - system check on hap-prod-01, 2026-11-13 10:33:24
+        <div class="code out has-label"><span class="label">a healthy server</span><pre><code>HAP attachment backup 1.3.0 - system check on hap-prod-01, 2026-11-13 10:33:24
 settings: /opt/hap-attachment-backup/backup.conf
 
 [ OK ] running as root
@@ -356,6 +356,7 @@ sudo hap-attachment-backup --check</code></pre></div>
             <tr><td><code>MINIO_ALIAS</code></td><td><code>file</code></td><td>Storage alias inside the app container</td></tr>
             <tr><td><code>DELIMITER</code></td><td><code>_</code></td><td>Between title and file name. Use the same in Import Attachments.</td></tr>
             <tr><td><code>TITLE_MAX_CHARS</code>, <code>NAME_MAX_CHARS</code></td><td class="num">100, 150</td><td>Longer titles and names are shortened</td></tr>
+            <tr><td><code>RECORD_FOLDERS</code></td><td><code>no</code></td><td><code>yes</code> puts each record's files in a folder named after its title: <code>&lt;App&gt;/&lt;Worksheet&gt;/&lt;title&gt;/&lt;title&gt;_&lt;file&gt;</code></td></tr>
             <tr><td><code>INCLUDE_APPS</code>, <code>EXCLUDE_APPS</code></td><td>empty</td><td>Comma-separated app IDs or names. Empty means all apps.</td></tr>
             <tr><td><code>LOG_FILE</code></td><td><code>/var/log/hap-attachment-backup.log</code></td><td>Log file</td></tr>
             <tr><td><code>LOG_LEVEL</code></td><td><code>INFO</code></td><td><code>DEBUG</code>, <code>INFO</code>, <code>WARNING</code> or <code>ERROR</code></td></tr>
@@ -368,7 +369,7 @@ sudo hap-attachment-backup --check</code></pre></div>
         <div class="section-head"><span class="step-no">4</span><h2>Dry run</h2></div>
         <p class="measure">Lists what would be copied, per worksheet, and which attachments have no file. Nothing is written. Add <code>--debug</code> to see every file and the counts per field.</p>
         <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo hap-attachment-backup --dry-run</code></pre></div>
-        <div class="code out has-label"><span class="label">example output</span><pre><code>[INFO] start: backup mode=incremental (dry run) - version 1.2.0, host hap-prod-01, user root, pid 247006, terminal
+        <div class="code out has-label"><span class="label">example output</span><pre><code>[INFO] start: backup mode=incremental (dry run) - version 1.3.0, host hap-prod-01, user root, pid 247006, terminal
 [WARNING] no earlier backup found in /data/hap-attachment-backup - running a full backup instead
 [INFO] HAP 7.4.5 (nocoly/hap:7.4.5); MongoDB container script-sc-1 (mongo), app container script-app-1, storage alias file
 [INFO] MongoDB export: 2480 file references in 1.4s
@@ -442,7 +443,7 @@ timedatectl | grep 'Time zone'</code></pre></div>
           </tbody>
         </table></div>
         <p class="measure">Each line has a time, a level and a run ID, so one run's lines can be picked out with <code>grep</code>. Start-up failures, such as a missing <code>python3</code>, are written to the log by the wrapper script.</p>
-        <div class="code out has-label"><span class="label">/var/log/hap-attachment-backup.log</span><pre><code>2026-11-14 02:00:01 [INFO] [20261114-020001-24817] start: backup mode=incremental - version 1.2.0, host hap-prod-01, user root, pid 24817, no terminal (cron or script)
+        <div class="code out has-label"><span class="label">/var/log/hap-attachment-backup.log</span><pre><code>2026-11-14 02:00:01 [INFO] [20261114-020001-24817] start: backup mode=incremental - version 1.3.0, host hap-prod-01, user root, pid 24817, no terminal (cron or script)
 2026-11-14 02:00:01 [INFO] [20261114-020001-24817] HAP 7.4.5 (nocoly/hap:7.4.5); MongoDB container script-sc-1 (mongo), app container script-app-1, storage alias file
 2026-11-14 02:00:02 [INFO] [20261114-020001-24817] MongoDB export: 2492 file references in 1.4s
 2026-11-14 02:00:02 [INFO] [20261114-020001-24817] mode=incr: 2492 file references in active records, 2489 with files, 3 without, 12 to copy (8.4 MB)
@@ -494,6 +495,7 @@ sudo grep -E '\[(ERROR|WARNING)\]' /var/log/hap-attachment-backup.log | tail -20
             <tr><td class="wrap-code"><code>not enough disk space</code></td><td>Free space would drop below <code>MIN_FREE_PCT</code></td><td>Free space, lower <code>KEEP_FULL</code>, or move <code>BACKUP_DIR</code></td></tr>
             <tr><td class="wrap-code"><code>backup.conf line N: unknown setting</code></td><td>Typo in a setting name</td><td>Correct it; the line is ignored until then</td></tr>
             <tr><td class="wrap-code"><code>[wrapper] python3 not found</code></td><td>Python missing or older than 3.8</td><td><code>apt install python3</code> or <code>dnf install python3</code></td></tr>
+            <tr><td class="wrap-code"><code>restore-storage: 0 restored, N already in storage</code></td><td>The attachments were removed from records; their files are still in storage</td><td>Use <code>--find-removed</code> (Restore A)</td></tr>
             <tr><td>No run at 02:00</td><td>Cron stopped or schedule missing</td><td><code>--check</code> shows both; <code>systemctl enable --now cron</code> (or <code>crond</code>)</td></tr>
             <tr><td class="wrap-code"><code>could not install logrotate</code> or <code>[FAIL] logrotate is not installed</code></td><td>The package manager cannot reach a repository, or logrotate was removed</td><td><code>apt install logrotate</code> or <code>dnf install logrotate</code> (or from OS media), then run <code>install.sh</code> again</td></tr>
             <tr><td class="wrap-code"><code>logrotate is installed but does not run daily</code></td><td><code>logrotate.timer</code> is disabled</td><td><code>systemctl enable --now logrotate.timer</code></td></tr>
@@ -504,24 +506,33 @@ sudo grep -E '\[(ERROR|WARNING)\]' /var/log/hap-attachment-backup.log | tail -20
 
       <section id="restore">
         <h2>Restore files</h2>
-        <p class="measure">Pick the method that matches what was lost.</p>
+        <p class="measure">Pick the method that matches what was lost. Removing an attachment from a record only removes the link: the file stays in HAP storage, so <code>--restore-storage</code> reports <code>0 restored</code> in that case. A deleted record comes back, with its attachments, from HAP's recycle bin.</p>
         <div class="options">
           <div class="option">
-            <span class="kicker">Records exist, files are missing</span>
-            <h3>A. Import Attachments in HAP</h3>
-            <p>Use this after restoring an app from a HAP backup, or to put files back on records.</p>
+            <span class="kicker">Attachments removed from records</span>
+            <h3>A. Find and re-import removed attachments</h3>
+            <p>Compares the backups with HAP now and copies only the files that are no longer on their record into <code>restore-&lt;date&gt;/&lt;App&gt;/&lt;Worksheet&gt;/&lt;Field&gt;/</code>, with <code>removed.csv</code> and <code>HOW-TO-IMPORT.txt</code>.</p>
+            <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo hap-attachment-backup --find-removed --dry-run
+sudo hap-attachment-backup --find-removed --worksheet "Submission Details"</code></pre></div>
+            <p>Then import each field folder with <b>Import Attachments</b> as in B, with <b>Write mode: Append</b>. Filters: <code>--app</code>, <code>--worksheet</code>, <code>--field</code>, <code>--record</code> (title or ID). Delete the restore folder afterwards.</p>
+            <p>HAP keeps the uploaded name, so a restored attachment shows as <code>&lt;title&gt;_&lt;original name&gt;</code>. The tool recognises such files: they are not reported as removed again, and their backup name does not repeat the title.</p>
+          </div>
+          <div class="option">
+            <span class="kicker">Records exist, a worksheet's files are missing</span>
+            <h3>B. Import Attachments in HAP</h3>
+            <p>Use this after restoring an app from a HAP backup, or to put a whole worksheet's files back on its records.</p>
             <ol class="steps">
               <li>Copy the worksheet folder to a PC (commands below). Use the latest full set, plus later nightly sets for the newest files.</li>
               <li>In HAP, open the worksheet, then <b>Import</b> &rsaquo; <b>Import Attachments</b>.</li>
               <li>Upload the files from <code>&lt;App&gt;/&lt;Worksheet&gt;/</code>. Up to 100 files and 2 GB per upload.</li>
               <li><b>File Name Matching Field</b>: the worksheet's title field. <b>Delimiter</b>: <code>_</code>.</li>
               <li><b>Target field</b>: the attachment field, shown in the <code>field</code> column of <code>manifest.csv</code>.</li>
-              <li><b>Write mode</b>: Append keeps existing files. Overwrite replaces them and cannot be undone.</li>
+              <li><b>Write mode</b>: Append keeps existing files (files still on a record are added again). Overwrite replaces them and cannot be undone.</li>
             </ol>
           </div>
           <div class="option">
             <span class="kicker">Records intact, storage lost</span>
-            <h3>B. Put files back into storage</h3>
+            <h3>C. Put files back into storage</h3>
             <p>Puts each file back at its original storage path, so records show their files again with the original file IDs. Files that already exist are left untouched.</p>
             <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo hap-attachment-backup --restore-storage full-2026-11-15_0200 --dry-run
 sudo hap-attachment-backup --restore-storage full-2026-11-15_0200</code></pre></div>
@@ -555,6 +566,7 @@ sudo rm /tmp/restore.tgz</code></pre></div>
             <tr><td><code>hap-attachment-backup --full</code></td><td>Copies every attachment into a new <code>full-…</code> set</td></tr>
             <tr><td><code>hap-attachment-backup</code></td><td>Copies only new files into an <code>incr-…</code> set (same as <code>--incremental</code>). Writes no set when nothing is new.</td></tr>
             <tr><td><code>hap-attachment-backup --verify [SET]</code></td><td>Re-checks a set against its checksums (default: newest)</td></tr>
+            <tr><td><code>hap-attachment-backup --find-removed</code></td><td>Finds attachments removed from records and copies them into a folder for Import Attachments. Add <code>--dry-run</code> to only list them.</td></tr>
             <tr><td><code>hap-attachment-backup --restore-storage SET</code></td><td>Puts missing files back into HAP storage. Add <code>--dry-run</code> to preview.</td></tr>
             <tr><td><code>hap-attachment-backup --support-bundle</code></td><td>Packs everything support needs into one file</td></tr>
           </tbody>

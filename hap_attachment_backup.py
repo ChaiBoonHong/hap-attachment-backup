@@ -6,8 +6,11 @@ backup does not include. Each file is saved as
 
     <backup set>/<App>/<Worksheet>/<record title>_<original file name>.<ext>
 
-so HAP's "Import Attachments" (File Name Matching Field = title field,
-delimiter "_") can attach it back to its record.
+(or .../<Worksheet>/<record title>/<record title>_<original file name>.<ext>
+with RECORD_FOLDERS=yes) so HAP's "Import Attachments" (File Name Matching
+Field = title field, delimiter "_") can attach it back to its record.
+--find-removed finds attachments that were removed from records since they
+were backed up and copies just those files into a folder for Import Attachments.
 
 Reads MongoDB and HAP storage only; it never writes to HAP, except with
 --restore-storage, which only puts back files that are missing from storage.
@@ -20,6 +23,7 @@ Python 3.8+ standard library only. See README.md.
 """
 
 import argparse
+import collections
 import csv
 import datetime as dt
 import errno
@@ -42,7 +46,7 @@ import threading
 import time
 import traceback
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MARK = "HAPBK\t"
 INFO_MARK = "HAPBK_INFO\t"
@@ -68,6 +72,7 @@ DEFAULTS = {
     "DELIMITER": "_",
     "TITLE_MAX_CHARS": "100",
     "NAME_MAX_CHARS": "150",
+    "RECORD_FOLDERS": "no",
     "INCLUDE_APPS": "",
     "EXCLUDE_APPS": "",
     "LOG_FILE": "/var/log/hap-attachment-backup.log",
@@ -77,6 +82,7 @@ DEFAULTS = {
 }
 INT_KEYS = ("KEEP_FULL", "KEEP_INCR_DAYS", "MIN_FREE_PCT", "TITLE_MAX_CHARS", "NAME_MAX_CHARS",
             "EXPORT_TIMEOUT", "COPY_TIMEOUT")
+BOOL_KEYS = ("RECORD_FOLDERS",)
 LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
 # Images of the HAP containers (international and China editions); compose service name as fallback.
@@ -89,6 +95,10 @@ MANIFEST_COLS = ["app", "worksheet", "field", "record_id", "title", "original_na
                  "app_id", "worksheet_id", "field_id", "uploaded_at", "note"]
 MISSING_COLS = ["app", "worksheet", "field", "record_id", "title", "file_id",
                 "bucket", "storage_key", "reason"]
+REMOVED_COLS = ["status", "app", "worksheet", "field", "record_id", "title", "original_name", "staged_file",
+                "backup_set", "backup_file", "size", "sha256", "file_id", "worksheet_id", "field_id"]
+IMPORT_MAX_FILES = 100                  # HAP Import Attachments: at most 100 files and 2 GB per upload
+IMPORT_MAX_BYTES = 1900 * 1024 ** 2
 
 EXIT_OK, EXIT_FATAL, EXIT_COPY_FAILED, EXIT_BUSY, EXIT_LOW_DISK = 0, 1, 2, 3, 4
 EXIT_NAMES = {0: "OK", 1: "ERROR", 2: "COPY_FAILED", 3: "BUSY", 4: "LOW_DISK"}
@@ -256,6 +266,11 @@ def load_conf(path):
             cfg[key] = int(cfg[key])
         except ValueError:
             raise ConfigError(f"{key} must be a whole number, found {cfg[key]!r}")
+    for key in BOOL_KEYS:
+        v = str(cfg[key]).strip().lower()
+        if v not in ("yes", "no", "true", "false", "1", "0", "on", "off", ""):
+            raise ConfigError(f"{key} must be yes or no, found {cfg[key]!r}")
+        cfg[key] = v in ("yes", "true", "1", "on")
     cfg["LOG_LEVEL"] = {"WARN": "WARNING"}.get(cfg["LOG_LEVEL"].upper(), cfg["LOG_LEVEL"].upper())
     if cfg["LOG_LEVEL"] not in LEVELS:
         raise ConfigError(f"LOG_LEVEL must be one of {', '.join(LEVELS)}, found {cfg['LOG_LEVEL']!r}")
@@ -512,8 +527,18 @@ def file_name(ref, cfg):
     orig = (ref.get("oname") or "").strip() or os.path.splitext(stored)[0] or ref["fid"]
     if ext and orig.lower().endswith(ext.lower()):
         orig = orig[: -len(ext)]
-    orig = clean(orig, cfg["NAME_MAX_CHARS"]) or ref["fid"]
+    orig = strip_title(clean(orig, cfg["NAME_MAX_CHARS"]), title, cfg["DELIMITER"]) or ref["fid"]
     return fit_bytes(f"{title}{cfg['DELIMITER']}{orig}", ext)
+
+
+def strip_title(name, title, delimiter):
+    """'<title><delimiter>x' -> 'x'. HAP Import Attachments keeps the uploaded file name, so a file put
+    back from a backup is called '<title>_<original name>'; without this its next backup name would
+    carry the title twice."""
+    prefix = f"{title}{delimiter}"
+    if title and len(name) > len(prefix) and name.lower().startswith(prefix.lower()):
+        return name[len(prefix):]
+    return name
 
 
 def unique(name, used):
@@ -532,6 +557,7 @@ class Folders:
     def __init__(self):
         self.apps, self.app_used = {}, set()
         self.ws, self.ws_used = {}, {}
+        self.rec, self.rec_used = {}, {}
 
     def app(self, ref):
         aid = ref.get("appId") or "unknown-app"
@@ -551,6 +577,23 @@ class Folders:
             used.add(name.lower())
             self.ws[wid] = name
         return os.path.join(app, self.ws[wid])
+
+    def record(self, ref, cfg):
+        """Folder for one record (RECORD_FOLDERS=yes): its title, or 'title (id)' when another record has it."""
+        wid, rid = ref["wsId"], ref.get("rowId") or "no-record"
+        key = (wid, rid)
+        if key not in self.rec:
+            used = self.rec_used.setdefault(wid, set())
+            name = clean(ref.get("title"), cfg["TITLE_MAX_CHARS"]) or rid
+            if name.lower() in used:
+                name = f"{name} ({rid[-6:]})"
+            used.add(name.lower())
+            self.rec[key] = name
+        return self.rec[key]
+
+    def dest(self, ref, cfg):
+        rel = self.worksheet(ref)
+        return os.path.join(rel, self.record(ref, cfg)) if cfg.get("RECORD_FOLDERS") else rel
 
 
 # ---------------------------------------------------------------- state, sets and retention
@@ -752,9 +795,10 @@ def run_backup(cfg, mode, dry_run):
     if dry_run:
         used, per_ws = {}, {}
         for r in todo:
-            rel = folders.worksheet(r)
+            rel = folders.dest(r, cfg)
             name = unique(file_name(r, cfg), used.setdefault(rel, set()))
-            per_ws.setdefault(rel, []).append(name)
+            per_ws.setdefault(folders.worksheet(r), []).append(os.path.relpath(os.path.join(rel, name),
+                                                                               folders.worksheet(r)))
             log.debug("  would copy %s/%s -> %s/%s", bucket_of(r["server"]), storage_key(r), rel, name)
         for rel, names in sorted(per_ws.items()):
             log.info("  %s/  (%d files)  e.g. %s", rel, len(names), names[0])
@@ -787,7 +831,7 @@ def run_backup(cfg, mode, dry_run):
     new_state = {} if mode == "full" else dict(state)
     progress = Progress("progress", len(todo), needed)
     for i, r in enumerate(todo, 1):
-        rel = folders.worksheet(r)
+        rel = folders.dest(r, cfg)
         dest_dir = os.path.join(work, rel)
         os.makedirs(dest_dir, exist_ok=True)
         name = unique(file_name(r, cfg), used.setdefault(rel, set()))
@@ -926,8 +970,224 @@ def run_restore_storage(cfg, name, dry_run):
     msg = (f"restore-storage{' (dry run)' if dry_run else ''}: {put} {'to restore' if dry_run else 'restored'}, "
            f"{skipped} already in storage (left untouched), {failed} failed")
     (log.error if failed else log.info)(msg)
+    if not put and not failed and skipped:
+        log.info("nothing to restore: every file in this set is still in HAP storage. Removing an attachment "
+                 "from a record leaves the file in storage; to put removed attachments back on their records, "
+                 "run: sudo hap-attachment-backup --find-removed")
     RESULT["summary"] = msg
     return EXIT_OK if not failed else EXIT_COPY_FAILED
+
+
+# ---------------------------------------------------------------- find attachments removed from records
+
+STATUS_JS = r"""
+var W = db.getSiblingDB("mdworksheet"), R = db.getSiblingDB("mdwsrows");
+var Q = @@QUERY@@;
+Q.forEach(function (q) {
+  var f = W.wscontrols.findOne({ wsid: q.ws, cid: q.field });
+  var st = {};
+  R.getCollection("ws" + q.ws).find({ rowid: { $in: q.rows } }, { rowid: 1, status: 1 }).forEach(function (d) {
+    st[d.rowid] = d.status;
+  });
+  print("HAPBK\t" + JSON.stringify({ ws: q.ws, field: q.field, fieldExists: !!f, rows: st }));
+});
+"""
+
+
+def record_status(cfg, rows):
+    """{(worksheet_id, field_id): (field_exists, {record_id: status})} for the records of these rows (read-only)."""
+    groups = {}
+    for r in rows:
+        groups.setdefault((r["worksheet_id"], r["field_id"]), set()).add(r["record_id"])
+    items = []
+    for (ws, field), ids in sorted(groups.items()):
+        ids = sorted(ids)
+        for i in range(0, len(ids), 1000):
+            items.append({"ws": ws, "field": field, "rows": ids[i:i + 1000]})
+    found, batch = {}, []
+
+    def flush():
+        if not batch:
+            return
+        out = mongo_eval(cfg, STATUS_JS.replace("@@QUERY@@", json.dumps(batch)), "record status", 600)
+        for line in out.splitlines():
+            if line.startswith(MARK):
+                o = json.loads(line[len(MARK):])
+                exists, st = found.get((o["ws"], o["field"]), (False, {}))
+                st.update(o["rows"])
+                found[(o["ws"], o["field"])] = (exists or o["fieldExists"], st)
+        batch.clear()
+
+    size = 0
+    for it in items:                    # keep each --eval argument well under the 128 KB argument limit
+        n = len(json.dumps(it))
+        if batch and size + n > 90000:
+            flush()
+            size = 0
+        batch.append(it)
+        size += n
+    flush()
+    return found
+
+
+def matches(want, *values):
+    w = (want or "").strip().lower()
+    return any(w == (v or "").strip().lower() for v in values)
+
+
+def removed_rows(backed, refs, delimiter="_"):
+    """Backed-up manifest rows whose file is no longer on its record. A file with the same original
+    name and size on the same record and field counts as still there: it was uploaded again, or put
+    back by Import Attachments (then its name starts with '<title><delimiter>')."""
+    def norm(name, title):
+        name = (name or "").strip()
+        return strip_title(name, (title or "").strip(), delimiter).lower()
+
+    present = {(r.get("rowId"), r.get("fieldId"), r.get("fid")) for r in refs}
+    same = {(r.get("rowId"), r.get("fieldId"), norm(r.get("oname"), r.get("title")), int(r.get("size") or 0))
+            for r in refs}
+    return [r for r in backed if (r["record_id"], r["field_id"], r["file_id"]) not in present
+            and (r["record_id"], r["field_id"], norm(r["original_name"], r["title"]),
+                 int(r["size"] or 0)) not in same]
+
+
+def files(n):
+    return f"{n} file" if n == 1 else f"{n} files"
+
+
+def removed_status(row, field_exists, record_status_code, delimiter):
+    if record_status_code is None:
+        return "record deleted - not staged"
+    if record_status_code != 1:
+        return "record in recycle bin - restore the record in HAP; its attachments come back with it"
+    if not field_exists:
+        return "attachment field deleted - not staged"
+    if delimiter in (row["title"] or ""):
+        return f"removed from record - attach by hand (title contains '{delimiter}')"
+    return "removed from record"
+
+
+def run_find_removed(cfg, name, flt, dry_run):
+    base = cfg["BACKUP_DIR"]
+    if name in (None, "", "all"):
+        sets = [os.path.join(base, s) for s in list_sets(base)]
+        if not sets:
+            raise RuntimeError(f"no backup sets in {base}")
+    else:
+        sets = [find_set(cfg, name)]
+    backed = {}
+    for sd in sets:                     # oldest first, so the newest copy of a file wins
+        for row in read_manifest(sd):
+            row["backup_set"], row["_dir"] = os.path.basename(sd), sd
+            backed[(row["record_id"], row["field_id"], row["file_id"])] = row
+    rows = [r for r in backed.values()
+            if (not flt["app"] or matches(flt["app"], r["app"], r["app_id"]))
+            and (not flt["worksheet"] or matches(flt["worksheet"], r["worksheet"], r["worksheet_id"]))
+            and (not flt["field"] or matches(flt["field"], r["field"], r["field_id"]))
+            and (not flt["record"] or matches(flt["record"], r["title"], r["record_id"]))]
+    shown = ", ".join(f"{k}={v!r}" for k, v in flt.items() if v)
+    log.info("find-removed%s: %d backed-up attachments in %d set(s)%s", " (dry run)" if dry_run else "",
+             len(rows), len(sets), f", filter {shown}" if shown else "")
+    if not rows:
+        RESULT["summary"] = "no backed-up attachments match" + (f" the filter ({shown})" if shown else "")
+        log.warning("%s", RESULT["summary"])
+        return EXIT_OK
+
+    resolve(cfg)
+    gone = removed_rows(rows, export_refs(cfg), cfg["DELIMITER"])
+    log.info("still on their records: %d of %d; not on their records: %d", len(rows) - len(gone), len(rows),
+             len(gone))
+    if not gone:
+        RESULT["summary"] = "nothing removed: every backed-up attachment is still on its record"
+        log.info("%s", RESULT["summary"])
+        return EXIT_OK
+
+    status = record_status(cfg, gone)
+    for r in gone:
+        exists, st = status.get((r["worksheet_id"], r["field_id"]), (False, {}))
+        r["status"] = removed_status(r, exists, st.get(r["record_id"]), cfg["DELIMITER"])
+    stage = [r for r in gone if r["status"].startswith("removed from record")]
+    for r in sorted(gone, key=lambda x: (x["app"], x["worksheet"], x["field"], x["title"]))[:50]:
+        log.info("  %s / %s / %s / %s: %s - %s", r["app"], r["worksheet"], r["field"], r["title"] or r["record_id"],
+                 r["original_name"], r["status"])
+    if len(gone) > 50:
+        log.info("  ... and %d more (all listed in removed.csv)", len(gone) - 50)
+    total = sum(int(r["size"] or 0) for r in stage)
+    if dry_run:
+        RESULT["summary"] = (f"{len(gone)} attachments not on their records; {len(stage)} would be staged "
+                             f"({human(total)}); dry run, nothing written")
+        log.info("%s", RESULT["summary"])
+        return EXIT_OK
+
+    out = os.path.join(base, f"restore-{dt.datetime.now():%Y-%m-%d_%H%M%S}")
+    os.makedirs(out, mode=0o750)
+    folders, used, groups, failed, plan = Folders(), {}, {}, 0, []
+    for r in sorted(stage, key=lambda x: (x["app"], x["worksheet"], x["field"], x["title"], x["original_name"])):
+        ref = {"appId": r["app_id"], "app": r["app"], "wsId": r["worksheet_id"], "ws": r["worksheet"]}
+        top = "attach-by-hand" if "by hand" in r["status"] else ""
+        groups.setdefault((top, folders.worksheet(ref), r["field_id"]), {"field": r["field"], "rows": []})[
+            "rows"].append(r)
+    for (top, wrel, fid), g in groups.items():
+        fdir = os.path.join(top, wrel, clean(g["field"], 80) or fid)
+        parts, cur, cur_bytes = [], [], 0
+        for r in g["rows"]:
+            n = int(r["size"] or 0)
+            if cur and (len(cur) >= IMPORT_MAX_FILES or cur_bytes + n > IMPORT_MAX_BYTES):
+                parts.append(cur)
+                cur, cur_bytes = [], 0
+            cur.append(r)
+            cur_bytes += n
+        parts.append(cur)
+        for i, part in enumerate(parts, 1):
+            rel = fdir if len(parts) == 1 else os.path.join(fdir, f"part-{i:02d}")
+            os.makedirs(os.path.join(out, rel), exist_ok=True)
+            for r in part:
+                fname = unique(os.path.basename(r["backup_file"]), used.setdefault(rel, set()))
+                try:
+                    shutil.copy2(os.path.join(r["_dir"], r["backup_file"]), os.path.join(out, rel, fname))
+                    r["staged_file"] = os.path.join(rel, fname).replace(os.sep, "/")
+                except OSError as e:
+                    failed += 1
+                    r["status"] = f"copy failed: {e}"
+                    log.error("cannot copy %s/%s: %s", r["backup_set"], r["backup_file"], e)
+            plan.append((top, rel.replace(os.sep, "/"), g["field"], len(part)))
+    write_csv(os.path.join(out, "removed.csv"), REMOVED_COLS, gone)
+    write_import_howto(out, plan, gone, cfg)
+    RESULT["summary"] = (f"{len(gone)} attachments not on their records; {len(stage) - failed} staged "
+                         f"({human(total)}) in {out}")
+    log.info("%s", RESULT["summary"])
+    log.info("next: follow %s/HOW-TO-IMPORT.txt (HAP: Import > Import Attachments, write mode Append)", out)
+    return EXIT_OK if not failed else EXIT_COPY_FAILED
+
+
+def write_import_howto(out, plan, gone, cfg):
+    lines = [
+        f"Attachments removed from HAP records, staged by hap-attachment-backup {VERSION} --find-removed",
+        f"on {socket.gethostname()}, {dt.datetime.now():%Y-%m-%d %H:%M}. Full list: removed.csv",
+        "",
+        "Each folder below holds the files of one attachment field. For each folder:",
+        "  1. Copy the folder to your computer (for example with WinSCP or scp).",
+        "  2. In HAP, open the worksheet and click Import > Import Attachments.",
+        f"  3. File name matching field: the worksheet's title field. Delimiter: {cfg['DELIMITER']}",
+        "  4. Target field: the field named below. Write mode: Append (keeps the attachments already there).",
+        "  5. Upload the files of the folder and click Start Import. HAP takes at most 100 files and",
+        "     2 GB per upload, so bigger folders are split into part-01, part-02, ...",
+        "  HAP names each imported attachment <title>_<original name> (the uploaded file name).",
+        "",
+        "Folders:",
+    ]
+    lines += [f"  {rel}/  ->  target field \"{field}\", {files(n)}" for top, rel, field, n in plan if not top]
+    hand = [(rel, field, n) for top, rel, field, n in plan if top]
+    if hand:
+        lines += ["", "Attach these by hand (open the record, add the file): their record title contains "
+                      f"\"{cfg['DELIMITER']}\", so Import Attachments would match the wrong part of the name."]
+        lines += [f"  {rel}/  ->  field \"{field}\", {files(n)}" for rel, field, n in hand]
+    other = collections.Counter(r["status"] for r in gone if not r["status"].startswith("removed from record"))
+    if other:
+        lines += ["", "Not staged:"] + [f"  {n} x {s}" for s, n in sorted(other.items())]
+    lines += ["", f"When the import is done, delete this folder: rm -rf '{out}'", ""]
+    with open(os.path.join(out, "HOW-TO-IMPORT.txt"), "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
 
 
 # ---------------------------------------------------------------- check
@@ -1304,6 +1564,9 @@ def run_status(cfg, out=print):
     if partial:
         out("unfinished    : " + ", ".join(partial) + " (interrupted runs; removed after one day)")
     lf = cfg["LOG_FILE"]
+    staged = sorted(d for d in os.listdir(base) if d.startswith("restore-")) if os.path.isdir(base) else []
+    if staged:
+        out("restore folders: " + ", ".join(staged) + " (from --find-removed; delete when imported)")
     out(f"log file      : {lf}" + (f" ({human(os.path.getsize(lf))})" if os.path.exists(lf) else " (not created yet)"))
     return EXIT_OK
 
@@ -1445,12 +1708,20 @@ def parse_args():
                    help="re-check a backup set against its manifest.csv (default: newest set)")
     g.add_argument("--restore-storage", metavar="SET",
                    help="put files from a backup set back into HAP storage where they are missing")
+    g.add_argument("--find-removed", nargs="?", const="all", metavar="SET",
+                   help="find attachments removed from records since they were backed up and copy them into "
+                        "a folder for HAP Import Attachments (default: look in all sets)")
     g.add_argument("--check", action="store_true", help="test settings, Docker, MongoDB, storage, disk, schedule")
     g.add_argument("--status", action="store_true", help="show backup sets, last run and schedule")
     g.add_argument("--log", nargs="?", const=0, type=int, metavar="N",
                    help="show the log of the last backup run, or the last N log lines")
     g.add_argument("--support-bundle", nargs="?", const="/tmp", metavar="DIR",
                    help="pack check, status, settings and logs into a .tar.gz for support (default /tmp)")
+    f = ap.add_argument_group("filters for --find-removed (name or ID, not case sensitive)")
+    f.add_argument("--app", metavar="NAME")
+    f.add_argument("--worksheet", metavar="NAME")
+    f.add_argument("--field", metavar="NAME")
+    f.add_argument("--record", metavar="TITLE", help="record title or record ID")
     ap.add_argument("--dry-run", action="store_true", help="show what would happen, write nothing")
     ap.add_argument("--debug", action="store_true", help="log every command and file for this run")
     ap.add_argument("--quiet", action="store_true", help="print only warnings and errors (the log is complete)")
@@ -1473,6 +1744,8 @@ def main():
         cmd = "verify"
     elif a.restore_storage:
         cmd = "restore"
+    elif a.find_removed:
+        cmd = "removed"
     else:
         cmd = "backup"
 
@@ -1496,7 +1769,8 @@ def main():
     mode = "full" if a.full else "incr"
     what = {"backup": f"backup mode={'full' if a.full else 'incremental'}", "verify": f"verify {a.verify}",
             "restore": f"restore-storage {a.restore_storage}", "check": "check",
-            "bundle": "support-bundle"}[cmd] + (" (dry run)" if a.dry_run and cmd in ("backup", "restore") else "")
+            "removed": f"find-removed {a.find_removed}", "bundle": "support-bundle"}[cmd]
+    what += " (dry run)" if a.dry_run and cmd in ("backup", "restore", "removed") else ""
     started, t0 = now_iso(), time.monotonic()
     RESULT.update({"run_id": RUN_ID, "started": started, "mode": mode if cmd == "backup" else cmd})
     log.info("start: %s - version %s, host %s, user %s, pid %d, %s", what, VERSION, socket.gethostname(),
@@ -1523,6 +1797,9 @@ def main():
             rc = run_verify(cfg, a.verify)
         elif cmd == "restore":
             rc = run_restore_storage(cfg, a.restore_storage, a.dry_run)
+        elif cmd == "removed":
+            rc = run_find_removed(cfg, a.find_removed, {"app": a.app, "worksheet": a.worksheet,
+                                                        "field": a.field, "record": a.record}, a.dry_run)
         else:
             rc = run_backup(cfg, mode, a.dry_run)
     except RuntimeError as e:
