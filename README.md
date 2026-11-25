@@ -12,6 +12,7 @@ HAP's own app backup saves apps, worksheets, workflows, views and records, but n
 - Full copy every Sunday at 02:00, new files only Monday to Saturday at 02:00, or any time by hand.
 - Reads HAP only. The optional storage restore writes only files that are missing.
 - Every run is logged. `--check` tests the server, `--debug` logs every command and file, and `--support-bundle` packs everything support needs.
+- `--app-backups` shows HAP's own app backups (`.mdy`) of every app on one screen: schedule, last backup, status and the last 7 days. See [HAP app backups](#hap-app-backups-mdy).
 - Python 3.8+ standard library only. Nothing to install in the HAP containers.
 
 **Step-by-step runbook:** https://chaiboonhong.github.io/hap-attachment-backup/ (install, check, logs and debugging, troubleshooting, restore, hand-over checklist).
@@ -29,7 +30,7 @@ This downloads the latest release, installs it to `/opt/hap-attachment-backup`, 
 Options go after `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash -s -- --version v1.3.0   # a given release
+curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash -s -- --version v1.4.0   # a given release
 curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash -s -- --no-cron          # no schedule
 curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh | sudo bash -s -- /srv/hap-backup    # another folder
 ```
@@ -37,9 +38,9 @@ curl -fsSL https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/
 Without the one-liner (for example on a server without internet access, copy the release file over first):
 
 ```bash
-curl -fsSLO https://github.com/ChaiBoonHong/hap-attachment-backup/archive/refs/tags/v1.3.0.tar.gz
-tar xzf v1.3.0.tar.gz
-sudo bash hap-attachment-backup-1.3.0/install.sh
+curl -fsSLO https://github.com/ChaiBoonHong/hap-attachment-backup/archive/refs/tags/v1.4.0.tar.gz
+tar xzf v1.4.0.tar.gz
+sudo bash hap-attachment-backup-1.4.0/install.sh
 ```
 
 Or with git: `git clone https://github.com/ChaiBoonHong/hap-attachment-backup.git && sudo bash hap-attachment-backup/install.sh`
@@ -107,6 +108,7 @@ result: 0 failed, 1 warnings - ready to back up
 | `hap-attachment-backup --find-removed [SET] [--dry-run]` | Finds attachments removed from records since they were backed up and copies just those files into a `restore-<date>` folder for HAP Import Attachments. Filters: `--app`, `--worksheet`, `--field`, `--record` (title or ID). Default: all sets. |
 | `hap-attachment-backup --restore-storage SET [--dry-run]` | Puts files back into HAP storage at their original path, only where they are missing. Never overwrites. |
 | `hap-attachment-backup --status` | Backup sets with file counts and sizes, last run, whether a run is active, schedule. |
+| `hap-attachment-backup --app-backups [DAYS]` | HAP's own app backups (`.mdy`) of every app: schedule, last backup, status and the last DAYS days (default 7). `--app NAME` for one app; `--quiet` prints only apps that need attention. See [HAP app backups](#hap-app-backups-mdy). |
 | `hap-attachment-backup --log [N]` | The log of the last backup run, or the last N log lines. |
 | `hap-attachment-backup --support-bundle [DIR]` | Packs check, status, settings (passwords hidden), recent log and system details into a `.tar.gz` (default `/tmp`). |
 
@@ -121,6 +123,42 @@ Add `--debug` to any command to log every command and every file for that run, o
 | `2` | Some files could not be copied or failed verification. |
 | `3` | Another backup or restore is still running. |
 | `4` | Not enough disk space. |
+| `5` | `--app-backups`: an app backup failed, is overdue or is stuck. |
+
+## HAP app backups (.mdy)
+
+HAP backs up each app itself: **App Management** > **Backup & Restore**, with **Regular Backup** for a schedule. Each app has its own list there. `--app-backups` puts every app on one screen:
+
+```
+$ sudo hap-attachment-backup --app-backups
+HAP app backups on hap-prod-01, 2026-11-25 09:00 (server time, UTC+08:00). Read from HAP's MongoDB; nothing is changed.
+
+APP                SCHEDULE          LAST BACKUP      KEPT  7 DAYS   STATUS
+Purchase Requests  daily             2026-11-23 08:40    9  +++++..  OVERDUE - last backup 2 days ago
+Sales Orders       daily             2026-11-25 08:40    7  ++++x+x  FAILED - last good backup 24h ago
+Accounts Payable   daily             2026-11-25 08:40   30  +++++++  OK
+Asset Register     weekly Mon +data  2026-11-23 08:40    2  ....+..  OK
+HR Leave           off               2026-11-06 14:25    1  .......  no schedule
+
+7 DAYS: 11-19 to 11-25, today last. + done, x failed, ~ queued or running, . none
+result: 5 apps, 4 with a schedule: 2 OK, 2 need attention, 1 without a schedule
+```
+
+- **SCHEDULE**: the app's Regular Backup (`daily`, `weekly Mon`, `monthly day 5`; `+data` when data is included), or `off`.
+- **LAST BACKUP**, **KEPT**: the newest backup file and how many backup files the app keeps, as listed in Backup & Restore.
+- **7 DAYS**: one mark per day, today last.
+- **STATUS**: apps that need attention are listed first.
+
+| Status | Meaning |
+|---|---|
+| `OK` | The last scheduled backup was made. |
+| `OVERDUE` | No successful backup since the schedule was due (daily: 27 hours, weekly: 7 days 3 hours, monthly: 31 days 3 hours). HAP does not catch up a scheduled backup that was missed while the server or HAP was down. |
+| `FAILED` | The newest backup failed. Check the app's Backup & Restore > Log. |
+| `STUCK` | A backup has been queued or running for more than 6 hours. |
+| `NO BACKUP` | Regular Backup is on, but no backup file was made. |
+| `no schedule` | Regular Backup is off for this app. Information only. |
+
+`--app-backups 14` shows 14 days (up to 60), `--app "Sales Orders"` shows one app. Times are server time. It reads MongoDB only and does not need attachment backups to be set up. Problems are also written to the log as warnings, and the exit code is `5` when an app needs attention, so monitoring tools can run `--app-backups --quiet`. The physical `.mdy` files are kept in HAP storage (`mdoc/backupapp/<date>/` under HAP's storage folder); download them from Backup & Restore rather than copying them from disk.
 
 ## Logs and debugging
 
@@ -152,7 +190,7 @@ sudo hap-attachment-backup --log                 # what happened in the last nig
 grep '\[ERROR\]\|\[WARNING\]' /var/log/hap-attachment-backup.log | tail -20
 ```
 
-**Getting help.** Run `sudo hap-attachment-backup --support-bundle` and send the `.tar.gz` it prints. It holds the check result, status, settings with passwords hidden, the last 5000 log lines, the logs of the last three sets and system details (OS, Docker, disk, containers). It holds no attachment files, but log lines can include app, worksheet and record names.
+**Getting help.** Run `sudo hap-attachment-backup --support-bundle` and send the `.tar.gz` it prints. It holds the check result, status, the app backup report, settings with passwords hidden, the last 5000 log lines, the logs of the last three sets and system details (OS, Docker, disk, containers). It holds no attachment files, but log lines can include app, worksheet and record names.
 
 **Safety checks built in.**
 - A second backup cannot start while one runs (exit code 3); the log names the running process.

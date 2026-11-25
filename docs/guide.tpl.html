@@ -208,6 +208,7 @@ footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
         <li><a href="#trouble"><span class="n">&middot;</span>Troubleshooting</a></li>
         <li><a href="#restore"><span class="n">&middot;</span>Restore files</a></li>
         <li><a href="#operate"><span class="n">&middot;</span>Day-to-day</a></li>
+        <li><a href="#app-backups"><span class="n">&middot;</span>HAP app backups</a></li>
         <li><a href="#files"><span class="n">&middot;</span>Script files</a></li>
       </ul>
     </nav>
@@ -274,7 +275,7 @@ footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
             <h3>Options</h3>
             <p>Add them after <code>bash -s --</code>:</p>
             <div class="code"><button class="copy" type="button">Copy</button><pre><code>G=https://raw.githubusercontent.com/ChaiBoonHong/hap-attachment-backup/main/get.sh
-curl -fsSL $G | sudo bash -s -- --version v1.3.0   # a given release
+curl -fsSL $G | sudo bash -s -- --version v1.4.0   # a given release
 curl -fsSL $G | sudo bash -s -- --no-cron          # no schedule
 curl -fsSL $G | sudo bash -s -- /srv/hap-backup    # another install folder</code></pre></div>
           </div>
@@ -465,7 +466,7 @@ sudo grep -E '\[(ERROR|WARNING)\]' /var/log/hap-attachment-backup.log | tail -20
         <h3>Support bundle</h3>
         <p class="measure">When something needs a closer look, ask the client to run this and send the file it prints:</p>
         <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo hap-attachment-backup --support-bundle</code></pre></div>
-        <p class="measure">The <code>.tar.gz</code> (in <code>/tmp</code>, readable by root only) holds the check result, status, settings with passwords hidden, the last 5000 log lines, the logs of the last three sets, and system details: OS, Docker, disk, containers, time zone. It holds no attachment files, but log lines can include app, worksheet and record names.</p>
+        <p class="measure">The <code>.tar.gz</code> (in <code>/tmp</code>, readable by root only) holds the check result, status, the app backup report, settings with passwords hidden, the last 5000 log lines, the logs of the last three sets, and system details: OS, Docker, disk, containers, time zone. It holds no attachment files, but log lines can include app, worksheet and record names.</p>
 
         <h3>Safety checks built in</h3>
         <ul class="plain">
@@ -561,6 +562,7 @@ sudo rm /tmp/restore.tgz</code></pre></div>
           <tbody>
             <tr><td><code>hap-attachment-backup --check</code></td><td>Tests the whole setup; a fix for every problem</td></tr>
             <tr><td><code>hap-attachment-backup --status</code></td><td>Backup sets with counts and sizes, last run, running now, schedule</td></tr>
+            <tr><td><code>hap-attachment-backup --app-backups [DAYS]</code></td><td>HAP's own app backups (<code>.mdy</code>) of every app on one screen: schedule, last backup, status, last 7 days. See <a href="#app-backups">HAP app backups</a>.</td></tr>
             <tr><td><code>hap-attachment-backup --log [N]</code></td><td>The last backup run, or the last N log lines</td></tr>
             <tr><td><code>hap-attachment-backup --dry-run</code></td><td>What would be copied and what is missing. Writes nothing.</td></tr>
             <tr><td><code>hap-attachment-backup --full</code></td><td>Copies every attachment into a new <code>full-…</code> set</td></tr>
@@ -582,12 +584,14 @@ sudo rm /tmp/restore.tgz</code></pre></div>
             <tr><td class="num">2</td><td>Some files could not be copied, or failed verification</td></tr>
             <tr><td class="num">3</td><td>Another backup or restore is still running</td></tr>
             <tr><td class="num">4</td><td>Not enough disk space</td></tr>
+            <tr><td class="num">5</td><td><code>--app-backups</code>: an app backup failed, is overdue or is stuck</td></tr>
           </tbody>
         </table></div>
 
         <h3>Regular checks</h3>
         <ul class="plain">
           <li><b>Weekly:</b> <code>sudo hap-attachment-backup --status</code>; the last run should be <code>OK</code> and less than a day old. Monitoring tools can read <code>last_run.json</code> instead.</li>
+          <li><b>Daily or weekly:</b> <code>sudo hap-attachment-backup --app-backups</code>; every app with Regular Backup should show <code>OK</code>.</li>
           <li><b>After a HAP upgrade:</b> <code>--check</code> and <code>--dry-run</code>, and compare the file counts. An upgrade can change how attachments are stored.</li>
           <li><b>Monthly:</b> <code>--verify</code> on the newest full set, and one Import Attachments restore in a test worksheet.</li>
         </ul>
@@ -605,6 +609,39 @@ sudo rm /tmp/restore.tgz</code></pre></div>
 # backups in /data/hap-attachment-backup and the log are kept; delete them only when no longer needed</code></pre></div>
       </section>
 
+      <section id="app-backups">
+        <h2>HAP app backups</h2>
+        <p class="measure">HAP backs up each app itself: <b>App Management</b> &gt; <b>Backup &amp; Restore</b>, with <b>Regular Backup</b> for a schedule. Each app has its own list there. <code>--app-backups</code> puts every app on one screen. It reads MongoDB only and does not need attachment backups to be set up.</p>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo hap-attachment-backup --app-backups                  # every app, last 7 days
+sudo hap-attachment-backup --app-backups 14               # last 14 days (up to 60)
+sudo hap-attachment-backup --app-backups --app "Sales Orders"
+sudo hap-attachment-backup --app-backups --quiet          # only apps that need attention</code></pre></div>
+        <div class="code out has-label"><span class="label">example output</span><pre><code>HAP app backups on hap-prod-01, 2026-11-25 09:00 (server time, UTC+08:00). Read from HAP's MongoDB; nothing is changed.
+
+APP                SCHEDULE          LAST BACKUP      KEPT  7 DAYS   STATUS
+Purchase Requests  daily             2026-11-23 08:40    9  +++++..  OVERDUE - last backup 2 days ago
+Sales Orders       daily             2026-11-25 08:40    7  ++++x+x  FAILED - last good backup 24h ago
+Accounts Payable   daily             2026-11-25 08:40   30  +++++++  OK
+Asset Register     weekly Mon +data  2026-11-23 08:40    2  ....+..  OK
+HR Leave           off               2026-11-06 14:25    1  .......  no schedule
+
+7 DAYS: 11-19 to 11-25, today last. + done, x failed, ~ queued or running, . none
+result: 5 apps, 4 with a schedule: 2 OK, 2 need attention, 1 without a schedule</code></pre></div>
+        <div class="table"><table>
+          <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>OK</code></td><td>The last scheduled backup was made.</td></tr>
+            <tr><td><code>OVERDUE</code></td><td>No successful backup since the schedule was due (daily: 27 hours, weekly: 7 days 3 hours, monthly: 31 days 3 hours). HAP does not catch up a scheduled backup that was missed while the server or HAP was down.</td></tr>
+            <tr><td><code>FAILED</code></td><td>The newest backup failed. Check the app's Backup &amp; Restore &gt; Log.</td></tr>
+            <tr><td><code>STUCK</code></td><td>A backup has been queued or running for more than 6 hours.</td></tr>
+            <tr><td><code>NO BACKUP</code></td><td>Regular Backup is on, but no backup file was made.</td></tr>
+            <tr><td><code>no schedule</code></td><td>Regular Backup is off for this app. Information only.</td></tr>
+          </tbody>
+        </table></div>
+        <p class="measure"><b>SCHEDULE</b> is the app's Regular Backup (<code>+data</code> when data is included). <b>KEPT</b> is how many backup files the app keeps. Apps that need attention are listed first, problems are written to the log as warnings, and the exit code is <code>5</code>, so monitoring tools can run <code>--app-backups --quiet</code>. Times are server time.</p>
+        <p class="measure">The <code>.mdy</code> files themselves are kept in HAP storage, under <code>mdoc/backupapp/&lt;date&gt;/</code> in HAP's storage folder. Each is stored as a storage object, not a plain file, so download backups from Backup &amp; Restore rather than copying them from disk.</p>
+      </section>
+
       <section id="files">
         <h2>Script files</h2>
         <p class="measure">The @@VERSION@@ package, also at <a href="https://github.com/ChaiBoonHong/hap-attachment-backup">github.com/ChaiBoonHong/hap-attachment-backup</a>. Open a file to read or copy it.</p>
@@ -612,7 +649,7 @@ sudo rm /tmp/restore.tgz</code></pre></div>
           <details class="file"><summary><code>get.sh</code><span>One-line installer: downloads the latest release and runs install.sh</span></summary><div class="code"><button class="copy" type="button">Copy</button><pre><code>@@FILE:get.sh@@</code></pre></div></details>
           <details class="file"><summary><code>install.sh</code><span>Installs, updates or removes the script, command, schedule and log rotation</span></summary><div class="code"><button class="copy" type="button">Copy</button><pre><code>@@FILE:install.sh@@</code></pre></div></details>
           <details class="file"><summary><code>hap-attachment-backup.sh</code><span>Entry point: finds Python, records start-up failures</span></summary><div class="code"><button class="copy" type="button">Copy</button><pre><code>@@FILE:hap-attachment-backup.sh@@</code></pre></div></details>
-          <details class="file"><summary><code>hap_attachment_backup.py</code><span>Backup, verify, restore, check, status, log and support bundle</span></summary><div class="code"><button class="copy" type="button">Copy</button><pre><code>@@FILE:hap_attachment_backup.py@@</code></pre></div></details>
+          <details class="file"><summary><code>hap_attachment_backup.py</code><span>Backup, verify, restore, check, status, app backups, log and support bundle</span></summary><div class="code"><button class="copy" type="button">Copy</button><pre><code>@@FILE:hap_attachment_backup.py@@</code></pre></div></details>
           <details class="file"><summary><code>export.js</code><span>Read-only MongoDB query</span></summary><div class="code"><button class="copy" type="button">Copy</button><pre><code>@@FILE:export.js@@</code></pre></div></details>
           <details class="file"><summary><code>backup.conf</code><span>Settings</span></summary><div class="code"><button class="copy" type="button">Copy</button><pre><code>@@FILE:backup.conf@@</code></pre></div></details>
         </div>

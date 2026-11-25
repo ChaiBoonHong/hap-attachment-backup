@@ -185,3 +185,66 @@ class ReimportedName(unittest.TestCase):
         self.assertEqual(hb.file_name(ref, CFG), "DO-1_Invoice.pdf")
         ref = {"fid": "f1", "title": "DO-1", "name": "x.pdf", "oname": "DO-1_"}
         self.assertEqual(hb.file_name(ref, CFG), "DO-1_DO-1_.pdf")
+
+
+class AppBackups(unittest.TestCase):
+    H = 3.6e6                                                     # one hour in milliseconds
+    NOW = hb.dt.datetime(2026, 11, 25, 10, 0).timestamp() * 1000  # local time
+    DAILY = {"cycle": 1, "value": None, "on": True, "data": False, "since": 0}
+
+    def app(self, task=None, latest=None, done="same", status=1):
+        b = latest and {"time": self.NOW - latest[0] * self.H, "status": latest[1]}
+        if done == "same":
+            done = b if b and b["status"] == 0 else None
+        elif done is not None:
+            done = {"time": self.NOW - done * self.H, "status": 0}
+        return {"appStatus": status, "task": task, "latest": b, "lastDone": done}
+
+    def state(self, *a, **k):
+        return hb.app_backup_state(self.app(*a, **k), self.NOW)
+
+    def test_schedule_text(self):
+        self.assertEqual(hb.schedule_text(self.DAILY), "daily")
+        self.assertEqual(hb.schedule_text(dict(self.DAILY, cycle=2, value=1)), "weekly Mon")
+        self.assertEqual(hb.schedule_text(dict(self.DAILY, cycle=2, value=0)), "weekly Sun")
+        self.assertEqual(hb.schedule_text(dict(self.DAILY, cycle=3, value=5, data=True)), "monthly day 5 +data")
+        self.assertEqual(hb.schedule_text(dict(self.DAILY, on=False)), "off")
+        self.assertEqual(hb.schedule_text(None), "off")
+
+    def test_daily_ok_and_overdue(self):
+        self.assertEqual(self.state(self.DAILY, (9, 0)), ("ok", "OK"))
+        self.assertEqual(self.state(self.DAILY, (26, 0)), ("ok", "OK"))           # within the grace period
+        self.assertEqual(self.state(self.DAILY, (57, 0)), ("problem", "OVERDUE - last backup 2 days ago"))
+
+    def test_weekly_is_not_overdue_after_three_days(self):
+        self.assertEqual(self.state(dict(self.DAILY, cycle=2, value=1), (80, 0)), ("ok", "OK"))
+
+    def test_failed_and_stuck(self):
+        self.assertEqual(self.state(self.DAILY, (9, 10), done=33),
+                         ("problem", "FAILED - last good backup 33h ago"))
+        self.assertEqual(self.state(self.DAILY, (9, 10), done=None),
+                         ("problem", "FAILED - no good backup kept"))
+        self.assertEqual(self.state(self.DAILY, (1, 1), done=20), ("info", "queued"))
+        self.assertEqual(self.state(self.DAILY, (8, 2), done=30), ("problem", "STUCK - backing up for 8h"))
+
+    def test_no_schedule_and_new_schedule(self):
+        self.assertEqual(self.state(None, (100, 0)), ("info", "no schedule"))
+        self.assertEqual(self.state(dict(self.DAILY, on=False)), ("info", "no schedule, no backup"))
+        new = dict(self.DAILY, since=self.NOW - 2 * self.H)
+        self.assertEqual(self.state(new), ("info", "waiting for the first scheduled backup"))
+        self.assertEqual(self.state(new, (200, 0)), ("ok", "OK"))                # schedule changed 2h ago
+        self.assertEqual(self.state(self.DAILY), ("problem", "NO BACKUP - scheduled, but none was made"))
+
+    def test_inactive_app(self):
+        self.assertEqual(self.state(self.DAILY, status=3)[0], "info")
+
+    def test_day_strip(self):
+        t = lambda d, h: hb.dt.datetime(2026, 11, d, h, 40).timestamp() * 1000
+        recent = [{"time": t(25, 0), "status": 0}, {"time": t(23, 0), "status": 10},
+                  {"time": t(22, 0), "status": 10}, {"time": t(22, 9), "status": 0}, {"time": t(21, 0), "status": 1}]
+        self.assertEqual(hb.day_strip(recent, 7, hb.dt.date(2026, 11, 25)), "..~+x.+")
+
+    def test_fit_wide_characters(self):
+        self.assertEqual(hb.fit("应付账款", 10), "应付账款  ")
+        self.assertEqual(hb.disp_width(hb.fit("定时备份_应付账款部门", 10)), 10)
+        self.assertEqual(hb.fit("Account Payable Dept", 10), "Account ..")

@@ -18,6 +18,7 @@ Reads MongoDB and HAP storage only; it never writes to HAP, except with
 Every run is logged to LOG_FILE (backup.conf). --debug logs each command and
 each file. --check tests the server, --status shows the backups, --log shows
 the last backup run, --support-bundle packs logs and settings for support.
+--app-backups shows HAP's own app backups (.mdy) of every app on one screen.
 
 Python 3.8+ standard library only. See README.md.
 """
@@ -45,8 +46,9 @@ import tempfile
 import threading
 import time
 import traceback
+import unicodedata
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MARK = "HAPBK\t"
 INFO_MARK = "HAPBK_INFO\t"
@@ -100,8 +102,8 @@ REMOVED_COLS = ["status", "app", "worksheet", "field", "record_id", "title", "or
 IMPORT_MAX_FILES = 100                  # HAP Import Attachments: at most 100 files and 2 GB per upload
 IMPORT_MAX_BYTES = 1900 * 1024 ** 2
 
-EXIT_OK, EXIT_FATAL, EXIT_COPY_FAILED, EXIT_BUSY, EXIT_LOW_DISK = 0, 1, 2, 3, 4
-EXIT_NAMES = {0: "OK", 1: "ERROR", 2: "COPY_FAILED", 3: "BUSY", 4: "LOW_DISK"}
+EXIT_OK, EXIT_FATAL, EXIT_COPY_FAILED, EXIT_BUSY, EXIT_LOW_DISK, EXIT_APP_BACKUPS = 0, 1, 2, 3, 4, 5
+EXIT_NAMES = {0: "OK", 1: "ERROR", 2: "COPY_FAILED", 3: "BUSY", 4: "LOW_DISK", 5: "APP_BACKUP_PROBLEM"}
 
 RUN_ID = f"{dt.datetime.now():%Y%m%d-%H%M%S}-{os.getpid()}"
 RESULT = {}          # facts about this run, written to last_run.json
@@ -1571,6 +1573,194 @@ def run_status(cfg, out=print):
     return EXIT_OK
 
 
+# ---------------------------------------------------------------- HAP's own app backups (.mdy)
+
+# One line per app: its schedule (mdapps.backuptask) and its backup files (mdapps.backuprestorelog,
+# operationtype 1 = backup file, as listed in App > Backup & Restore). Read only.
+APP_BACKUPS_JS = r"""
+var A = db.getSiblingDB("mdapps");
+var since = new Date(@@SINCE@@);
+var out = { hasLog: A.getCollectionNames().indexOf("backuprestorelog") >= 0, apps: [] };
+function ms(d) { return (d instanceof Date) ? d.getTime() : null; }
+function num(v) {
+  if (v === null || v === undefined) { return null; }
+  if (typeof v.toNumber === "function") { return v.toNumber(); }
+  return Number(v);
+}
+A.apk.find({}, { apkid: 1, apkName: 1, status: 1 }).forEach(function (a) {
+  var o = { id: a.apkid, name: a.apkName, appStatus: num(a.status), task: null, latest: null, lastDone: null,
+            kept: 0, recent: [] };
+  A.backuptask.find({ appId: a.apkid }).sort({ utime: -1 }).limit(1).forEach(function (t) {
+    o.task = { cycle: num(t.t), value: num(t.cv), on: num(t.s) === 1, data: !!t.datum,
+               since: ms(t.utime) || ms(t.ctime) };
+  });
+  if (out.hasLog) {
+    A.backuprestorelog.find({ apkid: a.apkid, operationtype: 1, isdelete: { $ne: true } },
+        { file: 1, ctime: 1, status: 1, cData: 1, sourceType: 1 }).sort({ ctime: -1 }).forEach(function (b) {
+      var x = { name: b.file ? b.file.name : "", time: ms(b.ctime), status: num(b.status), data: !!b.cData,
+                scheduled: num(b.sourceType) === 5 };
+      o.kept++;
+      if (!o.latest) { o.latest = x; }
+      if (!o.lastDone && x.status === 0) { o.lastDone = x; }
+      if (x.time !== null && x.time >= since.getTime()) { o.recent.push({ time: x.time, status: x.status }); }
+    });
+  }
+  out.apps.push(o);
+});
+print("HAPBK\t" + JSON.stringify(out));
+"""
+
+BACKUP_STATUS = {0: "Done", 1: "Queued", 2: "Backing up", 10: "Failed"}    # as in Backup & Restore
+CYCLE_DAYS = {1: 1, 2: 7, 3: 31}                                          # daily, weekly, monthly
+WEEKDAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")              # cycle value 0 = Sunday
+GRACE_HOURS = 3      # a scheduled backup counts as overdue this long after it was due
+STUCK_HOURS = 6      # queued or backing up for longer than this is reported
+
+
+def disp_width(text):
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
+
+
+def fit(text, width):
+    """Pad or cut text to a screen width (Chinese characters are two columns wide)."""
+    text = str(text)
+    if disp_width(text) > width:
+        while text and disp_width(text) > width - 2:
+            text = text[:-1]
+        text += ".."
+    return text + " " * (width - disp_width(text))
+
+
+def local_time(ms):
+    return dt.datetime.fromtimestamp(ms / 1000).astimezone()
+
+
+def span_text(hours):
+    return f"{hours:.0f}h" if hours < 48 else f"{hours / 24:.0f} days"
+
+
+def age_text(hours):
+    return span_text(hours) + " ago"
+
+
+def schedule_text(task):
+    if not task or not task.get("on"):
+        return "off"
+    cycle, value = task.get("cycle"), task.get("value")
+    if cycle == 1:
+        text = "daily"
+    elif cycle == 2:
+        text = f"weekly {WEEKDAYS[int(value)]}" if value is not None and 0 <= value <= 6 else "weekly"
+    elif cycle == 3:
+        text = f"monthly day {int(value)}" if value else "monthly"
+    else:
+        text = f"cycle {cycle}"
+    return text + (" +data" if task.get("data") else "")
+
+
+def app_backup_state(app, now_ms):
+    """(level, text) for one app: level is 'ok', 'info' or 'problem'."""
+    task, latest, done = app.get("task"), app.get("latest"), app.get("lastDone")
+    if app.get("appStatus") != 1:
+        return "info", f"app not active (HAP status {app.get('appStatus')})"
+    if latest:
+        st, hours = latest.get("status"), (now_ms - (latest.get("time") or 0)) / 3.6e6
+        if st == 10:
+            good = f"last good backup {age_text((now_ms - done['time']) / 3.6e6)}" if done else "no good backup kept"
+            return "problem", f"FAILED - {good}"
+        if st in (1, 2):
+            if hours > STUCK_HOURS:
+                return "problem", f"STUCK - {BACKUP_STATUS[st].lower()} for {span_text(hours)}"
+            return "info", BACKUP_STATUS[st].lower()
+        if st not in BACKUP_STATUS:
+            return "info", f"unknown backup status {st}"
+    if not (task and task.get("on")):
+        return "info", "no schedule" if done else "no schedule, no backup"
+    due = CYCLE_DAYS.get(task.get("cycle"), 1) * 24 + GRACE_HOURS
+    since = max(done["time"] if done else 0, task.get("since") or 0)
+    hours = (now_ms - since) / 3.6e6
+    if hours <= due:
+        return ("ok", "OK") if done else ("info", "waiting for the first scheduled backup")
+    if not done:
+        return "problem", "NO BACKUP - scheduled, but none was made"
+    return "problem", f"OVERDUE - last backup {age_text((now_ms - done['time']) / 3.6e6)}"
+
+
+def day_strip(recent, days, today):
+    """One character per day, oldest first, today last: + done, x failed, ~ queued or running, . none."""
+    marks = {}
+    for b in recent:
+        day = local_time(b["time"]).date()
+        marks.setdefault(day, set()).add(b.get("status"))
+    out = ""
+    for i in range(days - 1, -1, -1):
+        st = marks.get(today - dt.timedelta(days=i), set())
+        out += "+" if 0 in st else "x" if 10 in st else "~" if st & {1, 2} else "."
+    return out
+
+
+def run_app_backups(cfg, days, app_filter=None, quiet=False, out=print):
+    """HAP's own app backups for every app, read from MongoDB: schedule, last backup, status, last days."""
+    if not 1 <= days <= 60:
+        raise RuntimeError(f"--app-backups DAYS must be 1 to 60, not {days}")
+    resolve(cfg)
+    now = dt.datetime.now().astimezone()
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0) - dt.timedelta(days=days - 1)
+    js = APP_BACKUPS_JS.replace("@@SINCE@@", str(int(start.timestamp() * 1000)))
+    text = mongo_eval(cfg, js, "app backups", 300)
+    line = next((l for l in text.splitlines() if l.startswith(MARK)), None)
+    if line is None:
+        raise RuntimeError("app backup query returned nothing: " + short(text, 300))
+    data = json.loads(line[len(MARK):])
+    if not data.get("hasLog"):
+        raise RuntimeError("this HAP version keeps no app backup records in mdapps.backuprestorelog")
+    now_ms = now.timestamp() * 1000
+    apps = [a for a in data["apps"] if a.get("appStatus") == 1 or a.get("task") or a.get("kept")]
+    if app_filter:
+        apps = [a for a in apps if matches(app_filter, a.get("name"), a.get("id"))]
+        if not apps:
+            raise RuntimeError(f"no app named {app_filter!r}")
+    rows = []
+    for a in apps:
+        level, state = app_backup_state(a, now_ms)
+        rows.append((level, a, state))
+    rows.sort(key=lambda r: (r[0] != "problem", (r[1].get("name") or "").lower()))
+    problems = [r for r in rows if r[0] == "problem"]
+    scheduled = sum(1 for _, a, _ in rows if a.get("appStatus") == 1 and (a.get("task") or {}).get("on"))
+    ok = sum(1 for r in rows if r[0] == "ok")
+    unscheduled = sum(1 for r in rows if r[2].startswith("no schedule"))
+    zone = now.strftime("%z")
+    summary = (f"{len(rows)} app{'' if len(rows) == 1 else 's'}, {scheduled} with a schedule: {ok} OK, "
+               f"{len(problems)} need attention, {unscheduled} without a schedule")
+    file_log(logging.INFO, f"app backups: {summary}")
+    for _, a, state in problems:
+        file_log(logging.WARNING, f"app backup: {a.get('name')} ({a.get('id')}): {state}")
+    RESULT["summary"] = f"app backups: {summary}"
+    shown = problems if quiet else rows
+    if quiet and not shown:
+        return EXIT_OK
+    width = max([3] + [min(disp_width(a.get("name") or ""), 36) for _, a, _ in shown])
+    strip_head = f"{days} DAYS"
+    sw = max(days, len(strip_head))
+    out(f"HAP app backups on {socket.gethostname()}, {now:%Y-%m-%d %H:%M} "
+        f"(server time, UTC{zone[:3]}:{zone[3:]}). Read from HAP's MongoDB; nothing is changed.")
+    out("")
+    out(f"{fit('APP', width)}  {fit('SCHEDULE', 17)} {fit('LAST BACKUP', 16)} {'KEPT':>4}  "
+        f"{fit(strip_head, sw)}  STATUS")
+    today = now.date()
+    for _, a, state in shown:
+        latest = a.get("latest")
+        when = f"{local_time(latest['time']):%Y-%m-%d %H:%M}" if latest and latest.get("time") else "-"
+        out(f"{fit(a.get('name') or a.get('id'), width)}  {fit(schedule_text(a.get('task')), 17)} "
+            f"{fit(when, 16)} {a.get('kept', 0):>4}  {fit(day_strip(a.get('recent') or [], days, today), sw)}  "
+            f"{state}")
+    out("")
+    first = today - dt.timedelta(days=days - 1)
+    out(f"{days} DAYS: {first:%m-%d} to {today:%m-%d}, today last. + done, x failed, ~ queued or running, . none")
+    out(f"result: {summary}")
+    return EXIT_APP_BACKUPS if problems else EXIT_OK
+
+
 def tail_lines(path, max_bytes=8 << 20):
     with open(path, "rb") as f:
         f.seek(0, os.SEEK_END)
@@ -1644,6 +1834,12 @@ def run_bundle(cfg, conf_path, conf_warns, out_dir):
     st = []
     run_status(cfg, out=st.append)
     files["status.txt"] = "\n".join(st) + "\n"
+    ab = []
+    try:
+        run_app_backups(dict(cfg), 14, out=ab.append)
+    except (RuntimeError, ValueError) as e:
+        ab.append(f"(app backups could not be read: {e})")
+    files["app-backups.txt"] = "\n".join(ab) + "\n"
     sysinfo = [f"# hap-attachment-backup {VERSION}, python {sys.version.split()[0]}, user {user_name()}"]
     for cmd in SYSTEM_CMDS:
         sysinfo.append("\n$ " + " ".join(cmd))
@@ -1687,7 +1883,8 @@ def run_bundle(cfg, conf_path, conf_warns, out_dir):
             tar.addfile(info, io.BytesIO(data))
     print("")
     print(f"support bundle: {path} ({human(os.path.getsize(path))})")
-    print("It holds the check result, status, settings (passwords hidden), recent log lines and system details.")
+    print("It holds the check result, status, app backups, settings (passwords hidden), recent log lines and "
+          "system details.")
     print("It holds no attachment files. Log lines can include app, worksheet and record names.")
     log.info("support bundle written: %s", path)
     RESULT["summary"] = f"support bundle {path}"
@@ -1700,7 +1897,8 @@ def parse_args():
     ap = argparse.ArgumentParser(
         prog="hap-attachment-backup",
         description="Back up the files in HAP worksheet attachment fields.",
-        epilog="Exit codes: 0 OK, 1 error, 2 files not copied/verified, 3 another run in progress, 4 low disk space.")
+        epilog="Exit codes: 0 OK, 1 error, 2 files not copied/verified, 3 another run in progress, 4 low disk space, "
+               "5 an app backup failed, is overdue or stuck (--app-backups).")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--full", action="store_true", help="copy every attachment into a new full set")
     g.add_argument("--incremental", action="store_true", help="copy only files not in earlier sets (default)")
@@ -1717,8 +1915,11 @@ def parse_args():
                    help="show the log of the last backup run, or the last N log lines")
     g.add_argument("--support-bundle", nargs="?", const="/tmp", metavar="DIR",
                    help="pack check, status, settings and logs into a .tar.gz for support (default /tmp)")
-    f = ap.add_argument_group("filters for --find-removed (name or ID, not case sensitive)")
-    f.add_argument("--app", metavar="NAME")
+    g.add_argument("--app-backups", nargs="?", const=7, type=int, metavar="DAYS",
+                   help="show HAP's own app backups (.mdy) of every app: schedule, last backup, status and "
+                        "the last DAYS days (default 7). With --quiet, prints only apps that need attention")
+    f = ap.add_argument_group("filters for --find-removed and --app-backups (name or ID, not case sensitive)")
+    f.add_argument("--app", metavar="NAME", help="--app-backups takes only this filter")
     f.add_argument("--worksheet", metavar="NAME")
     f.add_argument("--field", metavar="NAME")
     f.add_argument("--record", metavar="TITLE", help="record title or record ID")
@@ -1740,6 +1941,8 @@ def main():
         cmd = "log"
     elif a.support_bundle:
         cmd = "bundle"
+    elif a.app_backups is not None:
+        cmd = "appbackups"
     elif a.verify:
         cmd = "verify"
     elif a.restore_storage:
@@ -1756,7 +1959,7 @@ def main():
         conf_err = str(e)
     level = "DEBUG" if a.debug else (cfg["LOG_LEVEL"] if cfg else "INFO")
     log_file = None if cmd in ("status", "log") else (cfg or DEFAULTS)["LOG_FILE"]
-    console = "WARNING" if a.quiet or (cmd in ("check", "bundle") and not a.debug) else "DEBUG"
+    console = "WARNING" if a.quiet or (cmd in ("check", "bundle", "appbackups") and not a.debug) else "DEBUG"
     setup_logging(level, log_file, console)
     if conf_err:
         log.error("settings: %s", conf_err)
@@ -1769,7 +1972,8 @@ def main():
     mode = "full" if a.full else "incr"
     what = {"backup": f"backup mode={'full' if a.full else 'incremental'}", "verify": f"verify {a.verify}",
             "restore": f"restore-storage {a.restore_storage}", "check": "check",
-            "removed": f"find-removed {a.find_removed}", "bundle": "support-bundle"}[cmd]
+            "removed": f"find-removed {a.find_removed}", "bundle": "support-bundle",
+            "appbackups": f"app-backups {a.app_backups}"}[cmd]
     what += " (dry run)" if a.dry_run and cmd in ("backup", "restore", "removed") else ""
     started, t0 = now_iso(), time.monotonic()
     RESULT.update({"run_id": RUN_ID, "started": started, "mode": mode if cmd == "backup" else cmd})
@@ -1793,6 +1997,8 @@ def main():
             rc = run_check(cfg, a.conf, warns)
         elif cmd == "bundle":
             rc = run_bundle(cfg, a.conf, warns, a.support_bundle)
+        elif cmd == "appbackups":
+            rc = run_app_backups(cfg, a.app_backups, a.app, a.quiet)
         elif cmd == "verify":
             rc = run_verify(cfg, a.verify)
         elif cmd == "restore":

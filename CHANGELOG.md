@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.0 - 2026-11-25
+
+- `--app-backups [DAYS]`: HAP's own app backups (`.mdy`) of every app on one screen, instead of opening Backup & Restore app by app. One line per app: Regular Backup schedule, newest backup, backup files kept, a mark per day for the last 7 days (or DAYS, up to 60), and a status: `OK`, `OVERDUE`, `FAILED`, `STUCK`, `NO BACKUP` or `no schedule`. `--app NAME` for one app; `--quiet` prints only apps that need attention. Read from MongoDB only.
+- Exit code `5` when an app backup failed, is overdue or is stuck; problems are also written to the log as warnings.
+- `--support-bundle` includes the app backup report for the last 14 days.
+
 ## 1.3.0 - 2026-11-20
 
 - `--find-removed [SET]`: finds attachments that were removed from records since they were backed up, and copies just those files into `BACKUP_DIR/restore-<date>/<App>/<Worksheet>/<Field>/` with a `removed.csv` list and `HOW-TO-IMPORT.txt`, ready for HAP Import Attachments (write mode Append). Filters: `--app`, `--worksheet`, `--field`, `--record`. Records in the recycle bin or deleted are listed, not staged.
